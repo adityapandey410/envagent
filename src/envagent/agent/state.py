@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 from envagent.hitl.gate import PlanStep
+
+
+class Assessment(TypedDict):
+    achieved: bool
+    summary: str
 
 
 class AgentState(TypedDict):
@@ -18,3 +23,9 @@ class AgentState(TypedDict):
     current_step_index: int
     results: list[dict]
     """Serialized ExecutionResult per completed step, in order."""
+
+    assessment: NotRequired[Assessment]
+    """Set by judge_node only on the 'done' path — an honest, LLM-reviewed
+    verdict on whether the goal was actually achieved (not just whether
+    every command exited 0). Absent on a 'failed' run: that path is
+    already an honest signal on its own."""

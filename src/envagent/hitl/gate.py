@@ -18,6 +18,12 @@ class PlanStep(TypedDict):
     check_command: NotRequired[str | None]
     """If present and it exits 0, the step's goal is already satisfied —
     skip the install/command entirely rather than re-running it."""
+    automatable: NotRequired[bool]
+    """Default True. False means this fundamentally cannot be done via a
+    CLI command (a GUI installer, an App Store login, a license
+    click-through) — 'command' is never executed in that case."""
+    manual_instructions: NotRequired[str | None]
+    """Human instructions shown to the user when automatable is False."""
 
 
 class Interrupt(TypedDict):

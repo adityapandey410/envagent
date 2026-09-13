@@ -8,7 +8,7 @@ from langgraph.types import Command
 from rich.console import Console
 
 from envagent.agent.graph import build_graph
-from envagent.agent.nodes import NotConfiguredError
+from envagent.agent.nodes import NoStepsPlannedError, NotConfiguredError
 from envagent.config.credentials import get_api_key, set_api_key
 from envagent.config.settings import Settings, load_settings, save_settings
 from envagent.providers.base import ProviderAuthError
@@ -81,13 +81,14 @@ def setup(
     save_settings(settings)
 
     try:
-        result = graph.invoke({"goal": goal, "status": "planning"}, config)
-    except NotConfiguredError as exc:
+        final_state = _drive_to_completion(
+            graph, config, {"goal": goal, "status": "planning"}
+        )
+    except (NotConfiguredError, NoStepsPlannedError) as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
 
-    result = _drive_to_completion(graph, config, result)
-    _finish(result, settings)
+    _finish(final_state, settings)
 
 
 @app.command()
@@ -113,26 +114,93 @@ def resume() -> None:
     console.print(f"[dim]Resuming session: {thread_id}[/dim]")
     payload = state.tasks[0].interrupts[0].value
     answer = _render_interrupt(payload)
-    result = graph.invoke(Command(resume=answer), config)
-    result = _drive_to_completion(graph, config, result)
-    _finish(result, settings)
+    final_state = _drive_to_completion(graph, config, Command(resume=answer))
+    _finish(final_state, settings)
 
 
-def _drive_to_completion(graph, config: dict, result: dict) -> dict:
-    while "__interrupt__" in result:
-        payload = result["__interrupt__"][0].value
-        answer = _render_interrupt(payload)
-        result = graph.invoke(Command(resume=answer), config)
-    return result
+def _drive_to_completion(graph, config: dict, stream_input) -> dict:
+    """Streams the graph node-by-node so every step is visible as it runs
+    (not just the ones needing HITL confirmation), handling any number of
+    interrupts along the way. Returns the final state once the graph
+    reaches a terminal status.
+
+    Two stream modes at once: 'custom' carries the real-time progress
+    events nodes push via get_stream_writer() (system info, the full
+    plan, each command as it starts, its output live, idempotency
+    skips) — 'updates' is only used to detect interrupts and a failed
+    verify, since the custom events already cover everything display-worthy.
+    """
+    while True:
+        interrupted = False
+        for mode, chunk in graph.stream(stream_input, config, stream_mode=["custom", "updates"]):
+            if mode == "custom":
+                _print_progress_event(chunk)
+                continue
+            if "__interrupt__" in chunk:
+                payload = chunk["__interrupt__"][0].value
+                answer = _render_interrupt(payload)
+                stream_input = Command(resume=answer)
+                interrupted = True
+                break
+            if chunk.get("verify", {}).get("status") == "failed":
+                console.print("[red]Step failed.[/red]")
+        if not interrupted:
+            break
+    return graph.get_state(config).values
+
+
+def _print_progress_event(event: dict) -> None:
+    kind = event.get("type")
+    if kind == "system_info":
+        console.print(f"[dim]Detected system: {event['description']}[/dim]")
+    elif kind == "plan_ready":
+        plan = event["plan"]
+        console.print(f"[dim]Plan generated: {len(plan)} step(s).[/dim]")
+        for i, step in enumerate(plan, start=1):
+            tag = "manual" if not step.get("automatable", True) else step["risk"]
+            console.print(f"  {i}. {step['description']} [dim]({tag})[/dim]")
+    elif kind == "check_start":
+        console.print(f"[dim]$ {event['command']}[/dim]  [dim]({event['description']})[/dim]")
+    elif kind == "check_satisfied":
+        console.print(f"[dim]  -> already satisfied: {event['description']} — skipping.[/dim]")
+    elif kind == "manual_action_needed":
+        console.print(
+            f"[yellow]  -> can't be automated: {event['description']}[/yellow]\n"
+            f"     {event['instructions']}"
+        )
+    elif kind == "command_start":
+        console.print(f"[bold]$ {event['command']}[/bold]  [dim]({event['description']})[/dim]")
+    elif kind == "output_line":
+        console.print(event["line"])
+    elif kind == "judging_start":
+        console.print("[dim]Reviewing whether the goal was actually achieved...[/dim]")
 
 
 def _finish(result: dict, settings: Settings) -> None:
     settings.extra.pop("active_thread_id", None)
     save_settings(settings)
-    if result["status"] == "done":
-        console.print("[green]Setup complete.[/green]")
-    else:
+    if result["status"] != "done":
         console.print("[red]Setup stopped (a step failed or was declined).[/red]")
+        return
+
+    assessment = result.get("assessment")
+    if assessment is None:
+        # Shouldn't happen (judge_node always runs on the 'done' path) but
+        # don't claim success we didn't actually verify.
+        console.print("[yellow]All steps ran, but the outcome wasn't verified.[/yellow]")
+    elif assessment["achieved"]:
+        console.print(f"[green]Goal achieved:[/green] {assessment['summary']}")
+    else:
+        console.print(
+            f"[yellow]Steps ran, but the goal may not be fully achieved:[/yellow] "
+            f"{assessment['summary']}"
+        )
+
+    manual_steps = [r for r in result.get("results", []) if r.get("needs_manual_action")]
+    if manual_steps:
+        console.print("\n[yellow]Manual steps still needed:[/yellow]")
+        for entry in manual_steps:
+            console.print(f"  - {entry['manual_instructions']}")
 
 
 def _render_interrupt(payload: dict):

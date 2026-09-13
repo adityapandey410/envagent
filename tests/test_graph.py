@@ -1,8 +1,11 @@
 import json
 
+import pytest
 from langgraph.types import Command
 
 from envagent.agent.graph import build_graph
+from envagent.agent.nodes import NoStepsPlannedError
+from envagent.agent.prompts import JUDGE_SYSTEM_PROMPT
 
 PLAN = [
     {
@@ -31,14 +34,17 @@ PLAN_ALREADY_SATISFIED = [
 
 
 class _FakeProvider:
-    def __init__(self, plan=PLAN):
+    def __init__(self, plan=PLAN, judgement=None):
         self._plan = plan
+        self._judgement = judgement or {"achieved": True, "summary": "All steps completed."}
 
     def complete(self, api_key: str, system: str, user: str) -> str:
+        if system == JUDGE_SYSTEM_PROMPT:
+            return json.dumps(self._judgement)
         return json.dumps(self._plan)
 
 
-def _patch_env(monkeypatch, tmp_path, plan=PLAN):
+def _patch_env(monkeypatch, tmp_path, plan=PLAN, judgement=None):
     monkeypatch.setattr(
         "envagent.agent.checkpointer.user_data_dir", lambda _app: str(tmp_path / "data")
     )
@@ -47,7 +53,7 @@ def _patch_env(monkeypatch, tmp_path, plan=PLAN):
     )
     monkeypatch.setattr(
         "envagent.agent.nodes._active_provider_and_key",
-        lambda: (_FakeProvider(plan), "fake-key"),
+        lambda: (_FakeProvider(plan, judgement), "fake-key"),
     )
 
 
@@ -125,3 +131,152 @@ def test_resume_works_from_a_freshly_built_graph_instance(monkeypatch, tmp_path)
     result = second_graph.invoke(Command(resume=True), config)
     assert result["status"] == "done"
     assert len(result["results"]) == 2
+
+
+def test_irrelevant_goal_raises_a_clear_error_instead_of_crashing(monkeypatch, tmp_path):
+    # A model asked to plan a non-setup goal (e.g. "what's the capital of
+    # France?") is instructed to return an empty plan. Nothing should try
+    # to index into that empty list.
+    _patch_env(monkeypatch, tmp_path, plan=[])
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "irrelevant-goal-thread"}}
+
+    with pytest.raises(NoStepsPlannedError):
+        graph.invoke({"goal": "what is the capital of France?", "status": "planning"}, config)
+
+
+SAFE_SINGLE_STEP_PLAN = [
+    {
+        "description": "check flutter setup",
+        "command": "echo hi",
+        "risk": "safe",
+        "undo_command": None,
+    },
+]
+
+
+def test_judge_catches_a_flutter_doctor_style_false_success(monkeypatch, tmp_path):
+    # The real bug this guards against: `flutter doctor` (and similar
+    # diagnostic tools) exits 0 even when it reports real problems.
+    # verify_node only checks the exit code, so without a judge step the
+    # graph would reach "done" and the CLI would print success regardless
+    # of what the tool's own output actually said.
+    _patch_env(
+        monkeypatch,
+        tmp_path,
+        plan=SAFE_SINGLE_STEP_PLAN,
+        judgement={
+            "achieved": False,
+            "summary": "Android SDK is missing and the Xcode install is incomplete.",
+        },
+    )
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "judge-catches-false-success"}}
+
+    result = graph.invoke(
+        {"goal": "set up flutter development environment", "status": "planning"}, config
+    )
+
+    # verify_node still calls this "done" (every command exited 0) —
+    # that's correct, it's exactly what verify_node is supposed to check.
+    assert result["status"] == "done"
+    # The judge is what catches that "done" isn't the same as "achieved".
+    assert result["assessment"]["achieved"] is False
+    assert "Android SDK" in result["assessment"]["summary"]
+
+
+def test_judge_confirms_a_genuine_success(monkeypatch, tmp_path):
+    _patch_env(
+        monkeypatch,
+        tmp_path,
+        plan=SAFE_SINGLE_STEP_PLAN,
+        judgement={"achieved": True, "summary": "Everything is installed and working."},
+    )
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "judge-confirms-success"}}
+
+    result = graph.invoke({"goal": "check flutter", "status": "planning"}, config)
+
+    assert result["status"] == "done"
+    assert result["assessment"]["achieved"] is True
+
+
+MANUAL_STEP_NO_CHECK_PLAN = [
+    {
+        "description": "Install Xcode",
+        "command": "echo SHOULD_NEVER_RUN",  # defensive: contract says "" — must never execute regardless
+        "risk": "destructive",
+        "undo_command": None,
+        "automatable": False,
+        "manual_instructions": "Open the App Store, sign in, and install Xcode.",
+    },
+]
+
+MANUAL_STEP_WITH_FAILING_CHECK_PLAN = [
+    {
+        "description": "Install Xcode",
+        "command": "echo SHOULD_NEVER_RUN",
+        "risk": "destructive",
+        "undo_command": None,
+        "check_command": "false",  # always "not yet satisfied"
+        "automatable": False,
+        "manual_instructions": "Open the App Store, sign in, and install Xcode.",
+    },
+]
+
+MANUAL_STEP_WITH_PASSING_CHECK_PLAN = [
+    {
+        "description": "Install Xcode",
+        "command": "echo SHOULD_NEVER_RUN",
+        "risk": "destructive",
+        "undo_command": None,
+        "check_command": "true",  # already satisfied
+        "automatable": False,
+        "manual_instructions": "Open the App Store, sign in, and install Xcode.",
+    },
+]
+
+
+def test_non_automatable_step_is_flagged_manual_without_hitl_or_execution(monkeypatch, tmp_path):
+    _patch_env(monkeypatch, tmp_path, plan=MANUAL_STEP_NO_CHECK_PLAN)
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "manual-step-no-check"}}
+
+    result = graph.invoke({"goal": "install xcode", "status": "planning"}, config)
+
+    # No interrupt: nothing destructive is attempted for a manual step.
+    assert "__interrupt__" not in result
+    assert result["status"] == "done"
+    entry = result["results"][0]
+    assert entry["needs_manual_action"] is True
+    assert "App Store" in entry["manual_instructions"]
+    # The command must genuinely never have run.
+    assert "SHOULD_NEVER_RUN" not in entry["stdout"]
+
+
+def test_non_automatable_step_with_failing_check_is_still_flagged_manual(monkeypatch, tmp_path):
+    _patch_env(monkeypatch, tmp_path, plan=MANUAL_STEP_WITH_FAILING_CHECK_PLAN)
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "manual-step-failing-check"}}
+
+    result = graph.invoke({"goal": "install xcode", "status": "planning"}, config)
+
+    assert result["status"] == "done"  # a "not yet done" check must not abort the run
+    entry = result["results"][0]
+    assert entry["needs_manual_action"] is True
+    assert entry["returncode"] == 0  # normalized — the check's own failure isn't a hard error
+
+
+def test_non_automatable_step_with_passing_check_is_satisfied_not_manual(monkeypatch, tmp_path):
+    # Idempotency wins over the manual-action flag: if it's already done,
+    # there's nothing to ask the user to do.
+    _patch_env(monkeypatch, tmp_path, plan=MANUAL_STEP_WITH_PASSING_CHECK_PLAN)
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "manual-step-passing-check"}}
+
+    result = graph.invoke({"goal": "install xcode", "status": "planning"}, config)
+
+    assert result["status"] == "done"
+    entry = result["results"][0]
+    assert entry.get("skipped_install") is True
+    assert "needs_manual_action" not in entry
