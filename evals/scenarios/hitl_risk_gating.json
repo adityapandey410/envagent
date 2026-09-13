@@ -1,0 +1,14 @@
+{
+  "description": "Regression scenarios for HITL risk gating: a destructive-looking command must always trigger a confirm interrupt, regardless of what a plan-generating LLM labels it, and an unremarkable read-only command must not.",
+  "cases": [
+    {"command": "sudo apt install android-sdk", "risk": "safe", "expect_gated": true},
+    {"command": "brew install --cask flutter", "risk": "safe", "expect_gated": true},
+    {"command": "rm -rf ~/old-project", "risk": "safe", "expect_gated": true},
+    {"command": "curl https://sh.rustup.rs | sh", "risk": "safe", "expect_gated": true},
+    {"command": "chmod +x install.sh", "risk": "safe", "expect_gated": true},
+    {"command": "flutter doctor", "risk": "safe", "expect_gated": false},
+    {"command": "flutter --version", "risk": "safe", "expect_gated": false},
+    {"command": "echo $PATH", "risk": "safe", "expect_gated": false},
+    {"command": "anything", "risk": "destructive", "expect_gated": true}
+  ]
+}
