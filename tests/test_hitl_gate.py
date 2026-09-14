@@ -1,4 +1,4 @@
-from envagent.hitl.gate import PlanStep, classify_step
+from envagent.hitl.gate import PlanStep, classify_step, is_diagnostic_step
 
 
 def _step(command: str, risk: str = "safe") -> PlanStep:
@@ -14,9 +14,6 @@ def test_explicit_destructive_risk_is_always_gated():
 
 
 def test_safety_net_overrides_a_mislabeled_safe_step():
-    # Even if a plan-generating LLM mislabels this "safe", the keyword
-    # safety net must still gate it. This is the behavior the "HITL is a
-    # hard gate, not a suggestion" principle depends on.
     step = _step("sudo apt install android-sdk", risk="safe")
     interrupt = classify_step(step)
     assert interrupt is not None
@@ -28,3 +25,19 @@ def test_confirm_message_includes_the_command_and_description():
     assert interrupt is not None
     assert "rm -rf /tmp/foo" in interrupt["message"]
     assert "test step" in interrupt["message"]
+
+
+def test_flutter_doctor_style_step_is_recognized_as_diagnostic():
+    step = PlanStep(
+        description="Run Flutter doctor to verify installation",
+        command="flutter doctor -v",
+        risk="safe",
+        undo_command=None,
+        check_command="flutter doctor -v >/dev/null 2>&1",
+    )
+    assert is_diagnostic_step(step) is True
+
+
+def test_an_ordinary_install_step_is_not_flagged_diagnostic():
+    step = _step("brew install --cask flutter")
+    assert is_diagnostic_step(step) is False

@@ -143,7 +143,19 @@ def _drive_to_completion(graph, config: dict, stream_input) -> dict:
                 interrupted = True
                 break
             if chunk.get("verify", {}).get("status") == "failed":
-                console.print("[red]Step failed.[/red]")
+                results = chunk["verify"].get("results") or []
+                if results:
+                    last = results[-1]
+                    console.print(
+                        f"[red]Step failed:[/red] `{last['command']}` "
+                        f"exited with code {last['returncode']}"
+                    )
+                    if last.get("stdout", "").strip():
+                        console.print(last["stdout"].rstrip())
+                    else:
+                        console.print("[dim](no output was produced — the failure may be in a redirected/suppressed part of the command)[/dim]")
+                else:
+                    console.print("[red]Step failed.[/red]")
         if not interrupted:
             break
     return graph.get_state(config).values
@@ -153,6 +165,13 @@ def _print_progress_event(event: dict) -> None:
     kind = event.get("type")
     if kind == "system_info":
         console.print(f"[dim]Detected system: {event['description']}[/dim]")
+    elif kind == "cannot_elevate":
+        console.print(
+            "[yellow]Warning: this user can't run privileged (sudo/admin) commands "
+            "on this machine — some steps may fail if elevation is required.[/yellow]"
+        )
+    elif kind == "recipe_matched":
+        console.print(f"[dim]Using vetted recipe: {event['name']} (doc-grounded plan).[/dim]")
     elif kind == "plan_ready":
         plan = event["plan"]
         console.print(f"[dim]Plan generated: {len(plan)} step(s).[/dim]")
@@ -167,6 +186,11 @@ def _print_progress_event(event: dict) -> None:
         console.print(
             f"[yellow]  -> can't be automated: {event['description']}[/yellow]\n"
             f"     {event['instructions']}"
+        )
+    elif kind == "manual_action_still_not_detected":
+        console.print(
+            f"[red]  -> still not detected: {event['description']} — stopping here "
+            "rather than continue past a step that likely depends on it.[/red]"
         )
     elif kind == "command_start":
         console.print(f"[bold]$ {event['command']}[/bold]  [dim]({event['description']})[/dim]")
@@ -185,8 +209,6 @@ def _finish(result: dict, settings: Settings) -> None:
 
     assessment = result.get("assessment")
     if assessment is None:
-        # Shouldn't happen (judge_node always runs on the 'done' path) but
-        # don't claim success we didn't actually verify.
         console.print("[yellow]All steps ran, but the outcome wasn't verified.[/yellow]")
     elif assessment["achieved"]:
         console.print(f"[green]Goal achieved:[/green] {assessment['summary']}")

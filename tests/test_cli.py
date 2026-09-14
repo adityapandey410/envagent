@@ -30,13 +30,16 @@ JUDGEMENT = {"achieved": True, "summary": "Both steps completed successfully."}
 
 
 class _FakeProvider:
+    def __init__(self, plan=PLAN):
+        self._plan = plan
+
     def complete(self, api_key: str, system: str, user: str) -> str:
         if system == JUDGE_SYSTEM_PROMPT:
             return json.dumps(JUDGEMENT)
-        return json.dumps(PLAN)
+        return json.dumps(self._plan)
 
 
-def _patch_env(monkeypatch, tmp_path):
+def _patch_env(monkeypatch, tmp_path, plan=PLAN):
     monkeypatch.setattr(
         "envagent.agent.checkpointer.user_data_dir", lambda _app: str(tmp_path / "data")
     )
@@ -48,7 +51,7 @@ def _patch_env(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         "envagent.agent.nodes._active_provider_and_key",
-        lambda: (_FakeProvider(), "fake-key"),
+        lambda: (_FakeProvider(plan), "fake-key"),
     )
     # Bypass questionary entirely: always approve any interrupt.
     monkeypatch.setattr("envagent.cli._render_interrupt", lambda payload: True)
@@ -66,3 +69,27 @@ def test_setup_prints_every_step_as_it_runs_not_just_the_gated_one(monkeypatch, 
     assert "$ echo installing" in result.output
     assert "Goal achieved:" in result.output
     assert "Both steps completed successfully." in result.output
+
+
+FAILING_PLAN = [
+    {
+        "description": "a command whose real error gets redirected away",
+        "command": "echo this goes to stderr, not stdout >&2; false",
+        "risk": "safe",
+        "undo_command": None,
+    },
+]
+
+
+def test_failed_step_shows_command_and_exit_code_not_just_a_bare_message(monkeypatch, tmp_path):
+    _patch_env(monkeypatch, tmp_path, plan=FAILING_PLAN)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["setup", "test goal"])
+
+    assert result.exit_code == 0, result.output
+    assert "Step failed:" in result.output
+    assert "echo this goes to stderr, not stdout >&2; false" in result.output
+    assert "exited with code" in result.output
+    assert "1" in result.output
+    assert "Setup stopped" in result.output

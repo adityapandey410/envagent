@@ -1,0 +1,12 @@
+name: flutter
+aliases:
+  - flutter
+  - dart sdk
+  - dart mobile
+doc_url: https://docs.flutter.dev/install/manual
+ide_choice:
+  message: "Which IDE do you want configured for Flutter development?"
+  options:
+    - "VS Code"
+    - "Android Studio"
+    - "Neither — I'll set it up myself"

@@ -32,10 +32,6 @@ class Interrupt(TypedDict):
     options: list[str] | None
 
 
-# Deterministic safety net: never trust a plan-generating LLM's own risk
-# self-report alone. If a command matches any of these, it is treated as
-# destructive regardless of what the model claims — "HITL is a hard gate,
-# not a suggestion" (CLAUDE.md). Err toward asking when uncertain.
 _DESTRUCTIVE_PATTERNS = (
     "sudo",
     "rm -rf",
@@ -72,3 +68,17 @@ def classify_step(step: PlanStep) -> Interrupt | None:
         message=f"About to run:\n  {step['command']}\n{step['description']}\nProceed?",
         options=None,
     )
+
+
+_DIAGNOSTIC_PATTERNS = (
+    "doctor",
+    "diagnos",
+    "check setup",
+    "verify setup",
+    "verify installation",
+)
+
+
+def is_diagnostic_step(step: PlanStep) -> bool:
+    text = f"{step['command']} {step['description']}".lower()
+    return any(pattern in text for pattern in _DIAGNOSTIC_PATTERNS)

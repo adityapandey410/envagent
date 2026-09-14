@@ -48,7 +48,24 @@ Two goals behind this project, in order:
   trusted default path for common stacks. Freeform "LLM reads docs and
   invents commands" is a fallback for targets with no recipe yet — not the
   primary mechanism. This bounds the risk of hallucinated/destructive
-  commands.
+  commands. **Scope reminder: Flutter (`recipes/flutter.yaml`) is the
+  first example recipe used to build this pipeline, not the boundary of
+  what the agent handles.** The user can ask for *any* dev environment
+  setup — `match_recipe()`/`fetch_doc()`/`extract_os_section()` are
+  fully generic; adding Node/Python/Docker/etc. later means a new
+  `.yaml` file, no code changes. Any goal that matches no recipe still
+  falls back to freeform planning today.
+  - **Planned evolution of the fallback path itself, not yet built**: the
+    freeform path currently has zero doc grounding — pure LLM training
+    knowledge, for anything without a curated recipe. The plan is to
+    integrate a web search API (Tavily, given DuckDuckGo has no real
+    developer API — see prior discussion) so the fallback can find and
+    ground itself in real official docs for arbitrary targets too, not
+    only recipe-covered ones — reducing reliance on stale/hallucination-
+    prone memory for the long tail of possible setup goals. This is
+    additive to recipes, not a replacement: a recipe's `doc_url` is
+    curated once and needs no search at all; search is specifically for
+    the case where no recipe exists yet.
 - **HITL is a hard gate, not a suggestion.** Every command the agent wants
   to run is risk-classified (read-only/check vs. destructive/irreversible).
   Destructive commands always require explicit user confirmation. Never
@@ -66,7 +83,13 @@ Two goals behind this project, in order:
   process. `verify_node` correctly treats exit code as *step* success (did
   the command crash) — that is a different question from *goal* success
   (was the thing actually achieved), which is `judge_node`'s job (see
-  Current status). Do not collapse these back into one check.
+  Current status). Do not collapse these back into one check. Corollary,
+  learned the hard way (see Current status item 13): the same lying-exit-
+  code problem applies to `check_command`/idempotency too, not just the
+  final judge — a diagnostic/status-report step must never be given a
+  `check_command` at all, since "it exited 0 before" says nothing about
+  problems it would report *now*. `hitl/gate.py::is_diagnostic_step`
+  enforces this deterministically; don't rely on the prompt alone for it.
 - **LangGraph is the orchestration layer.** The agent loop (plan → HITL
   interrupt → execute → verify → loop/resume) is built as a LangGraph
   graph, not a hand-rolled loop. Chosen deliberately over hand-rolling
@@ -179,7 +202,7 @@ a privacy concern, as long as it's opt-in and clearly scoped:
 | Credentials | `keyring` | Wraps OS keychain (Keychain/Credential Manager/libsecret) with no native compilation step |
 | Config | `platformdirs` + TOML | Non-secret settings: chosen provider, model, recipe cache location |
 | Command execution | stdlib `subprocess`, wrapped in a custom Executor | Logging + undo-log + risk classification live in this wrapper, not scattered at call sites |
-| Plan parsing | stdlib `json` (primary) + `json5` (fallback) | Strict `json.loads` first; `json5.loads` on failure, since models occasionally single-quote a string that contains literal double quotes — invalid strict JSON but valid JSON5 |
+| Plan parsing | stdlib `json` → `json5` → `json_repair` | Three free (zero token cost) fallback layers, each catching a different real crash seen in live testing: `json5` for single-quoted strings (a dialect difference), `json_repair` for structurally broken JSON like a missing comma (not a dialect difference — json5 can't fix this either) |
 | Observability | `langsmith` (dev-time, opt-in) | Tracing, token usage, loop diagnosis. Langfuse documented as open-source fallback |
 | Evaluation | `promptfoo` or `pytest`-based harness | Regression-test plan/tool-call correctness as prompts/models/recipes change |
 | Testing | `pytest` + GitHub Actions matrix (mac/windows/ubuntu runners) | Real OS differences can't be caught by unit tests alone |
@@ -215,15 +238,16 @@ cmd-line-agent/
 │   │   ├── checkpointer.py    # SqliteSaver setup (local persistence for resume)
 │   │   └── prompts.py         # PLAN_SYSTEM_PROMPT, JUDGE_SYSTEM_PROMPT
 │   ├── system/
-│   │   ├── os_detect.py       # OS/arch/package-manager detection (not built yet - Phase 2)
-│   │   ├── permissions.py     # sudo/admin/UAC checks (not built yet - Phase 2)
+│   │   ├── os_detect.py       # SystemInfo: os_key/arch/release/package_managers
+│   │   ├── permissions.py     # is_elevated()/can_elevate() — sudo/admin/UAC checks
 │   │   └── executor.py        # subprocess execution + JSONL logging + undo_command per entry
 │   ├── docs/
-│   │   ├── fetcher.py         # fetch + clean official doc pages
-│   │   └── cache.py
+│   │   ├── fetcher.py         # fetch_doc() (tries <url>.md first, else bs4 HTML extraction)
+│   │   │                      # + extract_os_section() (splits on {: .steps .<os>-only} markers)
+│   │   └── cache.py           # local cache keyed by URL, 7-day TTL
 │   ├── recipes/
-│   │   ├── registry.py        # loads vetted setup recipes
-│   │   └── flutter.yaml       # example: steps, verify commands, doc links
+│   │   ├── registry.py        # match_recipe(goal) — deterministic alias keyword match
+│   │   └── flutter.yaml       # name/aliases/doc_url/ide_choice
 │   └── hitl/
 │       └── gate.py            # risk classification + typed interrupt payloads
 │                               # ({type: confirm|select|checkbox, message, options?})
@@ -232,7 +256,7 @@ cmd-line-agent/
 ├── evals/
 │   └── scenarios/              # eval dataset: request -> expected plan/tool-calls/HITL
 ├── tests/
-└── scripts/install.sh         # curl-based bootstrap installer
+└── scripts/install.sh         # curl-based bootstrap installer (built — see Current status)
 ```
 
 ## Roadmap
@@ -266,6 +290,18 @@ cmd-line-agent/
     deciding silently.
 - **Phase 6 — Stretch**: IDE/editor integration (e.g. VSCode settings and
   extension install), community-contributed recipes, plugin system.
+  - **Adoption/onboarding idea, deliberately deferred**: BYOK is real
+    friction for anyone without an existing API key. Considered a
+    server-side free tier (pooled key, metered tokens per registered
+    user) to solve this — deliberately deferred: that requires real
+    ongoing LLM spend per free user, accounts, abuse prevention, and a
+    shared key to protect, none of which is worth building before there's
+    evidence of real user demand. Cheaper near-term alternative, not yet
+    built either: during `init`, if the user has no key, point them at a
+    provider's own existing free tier (Gemini) instead — zero
+    infrastructure, zero cost to the author, solves the same "let people
+    try it for free" problem. Revisit the server-based version only if
+    the cheap version proves insufficient once there are real users.
 
 ## Current status
 
@@ -310,12 +346,12 @@ model**:
   deliberately never approved during this test — that would have really
   installed Flutter on the dev machine.
 
-**Nine additions/fixes landed after Phase 1** — items 1-3 pulled forward
-from Phase 2/later because they were judged too important to defer; items
-4-9 are bugs/gaps found by testing or reasoning through a real result
-(one by writing a test, three by live-testing against a real provider,
-four of those raised by the user directly) and fixed immediately rather
-than left open:
+**Thirteen additions/fixes landed after Phase 1** — items 1-3 pulled
+forward from Phase 2/later because they were judged too important to
+defer; items 4-13 are bugs/gaps found by testing or reasoning through a
+real result (one by writing a test, seven by live-testing against a real
+provider, nine of those raised by the user directly) and fixed
+immediately rather than left open:
 
 1. **OS-awareness stopgap**: `plan_node` interpolates the real detected
    OS/arch (`platform.system()`/`.machine()`/`.release()`, via
@@ -512,23 +548,261 @@ than left open:
      correctly with no check, still flagged (not treated as a hard
      failure) when a check exists but fails, and correctly treated as
      already-satisfied (not manual) when a check exists and passes.
+10. **A second, different real JSON crash — reported directly by the
+    user**, same goal as item 6 (`"setup flutter development
+    environment"`), different generation: `json.JSONDecodeError`
+    ("Expecting ',' delimiter") and, notably, `json5` *also* failed on
+    the same text. Captured the raw output to check — a genuinely
+    missing comma between two fields, not a dialect difference like the
+    single-quote case, so `json5` could never have fixed this class of
+    error. Confirmed the non-determinism directly too: re-running the
+    exact same goal against the same real provider immediately after
+    produced perfectly valid JSON on the very next call — so this isn't
+    reproducible from one bad sample, it's inherent variance across
+    generations. Fixed by adding a third, still-free fallback layer:
+    `json_repair` (new dependency, purpose-built for repairing malformed
+    LLM JSON — missing commas/brackets, unterminated strings). Verified
+    it fixes both the missing-comma pattern and an unterminated-string
+    pattern with synthetic tests before trusting it. Deliberately did
+    NOT add a costly LLM-retry-on-parse-failure fallback: `json_repair`
+    is designed to essentially never fail outright, so planning stays
+    exactly one call; revisit only if this recurs even past all three
+    layers. Covered by `tests/test_plan_parsing.py::test_parse_plan_falls_back_for_a_missing_comma_delimiter`.
+11. **A real step failure with a diagnosable root cause, plus a bare
+    error message — both reported directly by the user**: same goal
+    again, this time parsing succeeded and execution ran real steps, but
+    step 5 ("Add Flutter to PATH via Flutter-managed environment") failed
+    with zero visible output before "Step failed." Diagnosed by running
+    the suspicious part of the generated command directly: `brew --prefix
+    flutter` failed with `Error: No available formula with the name
+    "flutter"` — Flutter had been installed as a Homebrew **cask** (step
+    4 used `brew install --cask flutter`), but this step's command used
+    formula-only lookup syntax (`brew --prefix flutter`, no `--cask`) —
+    an internal inconsistency in the model's own plan. The command also
+    had `2>/dev/null` specifically on that `brew --prefix` call, which is
+    exactly why nothing was visible — the one diagnostic that would have
+    explained the failure was suppressed by the command itself before the
+    agent ever had a chance to stream it.
+    - This particular root cause is a **plan-quality issue from Phase 1's
+      freeform planning**, not an execution/architecture bug — `verify_node`,
+      the Executor, and streaming all behaved correctly (correctly detected
+      the real failure and stopped rather than continuing past it). Exactly
+      the class of mistake Phase 2's recipes (hand-vetted, not freeform) are
+      meant to reduce.
+    - What *was* a real, fixed gap: `cli.py`'s failure message was a bare
+      `"Step failed."` with zero diagnostic — no command, no exit code —
+      even though that information was already sitting in the `verify`
+      node's own state update (since `verify_node` returns `{**state,
+      "status": "failed"}`, a full-state spread, the 'updates' stream
+      chunk already carries the failed step's real `results` entry). Fixed
+      to print the actual command, its exit code, and its output (or an
+      explicit note when output was empty, as here) — zero cost, purely a
+      display change using data that was already available. Covered by
+      `tests/test_cli.py::test_failed_step_shows_command_and_exit_code_not_just_a_bare_message`.
+    - Also added, same live-testing round: a general "be internally
+      consistent about how a tool was installed" instruction in
+      `PLAN_SYSTEM_PROMPT` (not Homebrew-cask-specific — applies equally
+      to apt/snap, pip/pipx, etc.), as a cheap mitigation for this class
+      of mistake.
+12. **Manual-step dependency gap — directly reported by the user testing
+    `envagent setup "install xcode"`**: step 1 (installing Xcode) was
+    correctly flagged manual and skipped without attempting it — but the
+    agent then just moved on to steps 2-3 with no way of knowing whether
+    the user had actually gone and done it. Step 3
+    (`sudo xcodebuild -license accept`) genuinely requires full Xcode.app,
+    which was never installed, so it failed with a real but confusing OS
+    error (`active developer directory ... is a command line tools
+    instance`) — correct behavior given the state, but the agent had no
+    business attempting it at all without checking the prerequisite.
+    Fixed in `agent/nodes.py::execute_node`: a non-automatable step now
+    raises a `confirm` interrupt — "have you completed this yourself?" —
+    instead of silently moving on.
+    - Declining stops the run immediately (same pattern as declining a
+      destructive step) — no results entry added, nothing attempted.
+    - Confirming "yes" does **not** get taken at face value if a
+      `check_command` exists: it's **re-run** to verify. Only if it now
+      passes does the step get recorded as genuinely satisfied
+      (`skipped_install`, not `needs_manual_action`); if it still fails,
+      the run stops with a clear `manual_action_still_not_detected`
+      message rather than proceeding into a step that likely depends on
+      it. Only when there's no `check_command` at all (nothing to verify
+      with) does a confirmation get trusted at face value.
+    - Live-verified twice against the real machine/provider: (a) a
+      synthetic counter-based check confirming the re-check genuinely
+      re-runs (fails twice — once before the pause, once again on
+      resume's node re-execution — then the explicit post-confirm
+      recheck is what actually passes); (b) the exact real `"install
+      xcode"` scenario, answering honestly that Xcode isn't installed —
+      now stops cleanly at step 1 with zero results recorded, instead of
+      cascading into the step-3 crash.
+    - Covered by three rewritten/new tests in `tests/test_graph.py`:
+      confirmation-then-still-failing stops the run,
+      declining stops the run, and (unchanged from before) a check that
+      already passes on the first try skips straight past the manual
+      flag entirely — idempotency still wins over asking.
+13. **Idempotency swallowing a diagnostic step's real output — reported
+    directly by the user testing `envagent setup "install flutter sdk"`**:
+    the generated plan gave its `flutter doctor -v` step a
+    `check_command` of `flutter doctor -v >/dev/null 2>&1`. That exited 0
+    (verified live — same machine, same known-incomplete Xcode/Android
+    setup from item 8), so the step got skipped via the idempotency path
+    entirely — the real diagnostic output never ran, never reached the
+    judge, and the judge confidently reported "Goal achieved" based on
+    nothing. This is the same exit-code-lies problem `judge_node` exists
+    to catch, hitting a different part of the pipeline: the check
+    intercepted the step *before* judge_node ever got a chance to see
+    real output.
+    - Root issue: a step whose purpose is to report *current* status
+      (a "doctor"/diagnostic command) is not the kind of thing that
+      should ever be treated as idempotent — "it exited 0 once before"
+      says nothing about whether problems exist *now*.
+    - Fixed two ways, same pattern as the destructive-risk safety net:
+      (a) `PLAN_SYSTEM_PROMPT` now explicitly forbids giving a
+      diagnostic-purpose step a `check_command`; (b) **deterministic
+      override**, not relying on the prompt alone (model behavior on this
+      was inconsistent across generations, same non-determinism seen
+      throughout this session) — `hitl/gate.py::is_diagnostic_step`
+      pattern-matches on `"doctor"`/`"diagnos"`/etc. in the step's own
+      command+description, and `execute_node` ignores any
+      `check_command` on a match, forcing the step to always run fresh
+      regardless of what the plan gave it.
+    - Verified against the exact real step shape from the bug report: the
+      diagnostic step now genuinely executes (not skipped), its real
+      output (including the real Android SDK/Xcode gaps) is captured, and
+      a fresh judge call correctly reports `achieved: false` with the
+      accurate reasons. (One retry during this verification hit a
+      malformed judge JSON response and correctly fell back to the
+      existing "couldn't parse, don't claim success" safety net from item
+      6 — not a new bug, that fallback working as designed for the first
+      time observed live.)
+    - Covered by `tests/test_hitl_gate.py::test_flutter_doctor_style_step_is_recognized_as_diagnostic`
+      (+ a negative case) and
+      `tests/test_graph.py::test_diagnostic_step_ignores_its_own_check_command_and_always_runs`.
 
 Repo is now on GitHub: https://github.com/adityapandey410/envagent
-(private) — items 1-3 above were already part of the pushed initial
-commit. Items 4-9 are new since that commit and not yet pushed — see
-below.
+(private) — items 1-9 above are pushed to `main` (commit `f850ece`).
+Items 10-13, and all of Phase 2 below, are new since that push and not
+yet pushed.
 
-Not yet done: `.github/ISSUE_TEMPLATE/` and Discussions not set up; `select`/`checkbox` interrupt types are implemented end-to-end in
-`cli.py` but not yet exercised by any real plan content (nothing in
-Phase 1's freeform planning asks for a choice — that arrives with the
-Flutter recipe's IDE choice in Phase 2); LangSmith tracing needs no code
-(documented in README — env vars only) but hasn't been turned on and
-inspected yet; official doc grounding (fetch a recipe's real doc URL,
-extract the OS-relevant section, inject as prompt context) is unbuilt —
-requires `docs/fetcher.py` (httpx + beautifulsoup4/trafilatura),
-`docs/cache.py`, and a recipe registry carrying doc URLs, all Phase 2.
+**Phase 2 (doc-grounded Flutter recipe, macOS) is built and verified live
+against the real Flutter docs and a real provider call** — not just unit
+tests:
+- `system/os_detect.py::detect_system()` replaces the Phase-1 string
+  stopgap with a structured `SystemInfo`: `os_key` ('macos'/'linux'/
+  'windows' — chosen specifically to match doc sites' own OS-selector
+  class-naming convention, not an arbitrary internal label), arch,
+  release, and which candidate package manager is actually on PATH
+  (checked via `shutil.which`, e.g. `brew` on macOS).
+- `docs/fetcher.py::fetch_doc()` — tries a page's markdown variant first
+  (`<url>.md`), which needs no HTML parsing at all; falls back to
+  `beautifulsoup4` extraction. **Verified against the real
+  docs.flutter.dev before building on top of it**: found the site
+  declares `<link rel="alternate" type="text/markdown">`, confirmed
+  `/install/manual.md` returns clean pre-rendered markdown directly —
+  `trafilatura` turned out unnecessary for this site.
+  `docs/cache.py` — local cache keyed by URL hash, 7-day TTL.
+- `docs/fetcher.py::extract_os_section()` — splits on the `{: .steps
+  .<os>-only}` marker convention Flutter's docs use for OS-selector tabs
+  (a Jekyll-style attribute-list convention: a marker immediately after a
+  block retroactively labels that block). **A real bug was caught here
+  during verification, not left to production**: the first implementation
+  had the marker-to-block pairing backwards (attributed each marker's
+  label to the block *after* it instead of *before* it) — it ran without
+  error and silently extracted the *wrong* OS's content (macOS's
+  extraction actually contained Linux's `apt-get` instructions). Caught
+  by checking actual keyword presence (`"Xcode" in section`) against the
+  real fetched page rather than trusting that "it ran without a
+  traceback" meant it was correct. Fixed and pinned as a regression test
+  using a synthetic doc mirroring the exact real structure
+  (`tests/test_docs_fetcher.py`, 5 cases). Known accepted limitation:
+  content before the *first* marker can't be cleanly separated from that
+  first-listed OS's own steps (they're not textually distinguished in the
+  source) — a minor cosmetic loss for other OSes, not a correctness
+  issue.
+- `recipes/registry.py::match_recipe()` — deterministic alias/keyword
+  matching against `recipes/*.yaml`, no LLM call (keeps planning at
+  exactly one call for recipe-covered goals too, same as freeform).
+  `recipes/flutter.yaml` — the first recipe: aliases, `doc_url`
+  (`docs.flutter.dev/install/manual`), and an `ide_choice` (message +
+  options for VS Code / Android Studio / neither).
+- `agent/nodes.py::plan_node` rewired: checks `match_recipe(goal)` before
+  planning; on a match, raises a `select` interrupt for the recipe's
+  `ide_choice` (**the first real exercise of that interrupt type** —
+  previously wired end-to-end but never exercised by real plan content),
+  persists the answer in state (`AgentState.ide_choice`, new field) so a
+  resumed run doesn't ask again, fetches + OS-extracts the recipe's doc,
+  and injects it into the *same single* planning call as grounding
+  context (capped at ~6000 chars, same cost-bounding pattern as the
+  judge's per-step truncation). No match falls back to Phase 1's
+  freeform behavior unchanged. `PLAN_SYSTEM_PROMPT` now instructs the
+  model to treat an included doc excerpt as authoritative over its own
+  knowledge.
+- **Verified live, end-to-end, with the real provider and real Flutter
+  docs** (not mocked): `envagent setup "install flutter sdk"` correctly
+  matched the flutter recipe, raised the real `select` interrupt with the
+  real IDE options, and — after resuming with "VS Code" — produced a plan
+  using the **manual zip-download method** (`~/develop`,
+  `flutter_macos_..._stable.zip`, PATH setup, `flutter doctor`) matching
+  the real `/install/manual` doc's actual structure exactly — a visibly
+  different (and now doc-accurate) plan shape from earlier ungrounded
+  runs, which had used a Homebrew-based approach instead.
+- Also covered by 3 new tests in `tests/test_graph.py` (recipe match
+  raises the select interrupt; the planning prompt actually contains the
+  fetched doc content, checked via a capturing fake provider; `ide_choice`
+  isn't asked again on resume) and 2 pre-existing judge tests whose goals
+  needed to be changed to non-flutter strings, since "flutter" now
+  legitimately matches the new recipe and those tests are about judge
+  logic specifically, not recipe behavior.
+- **`system/permissions.py` — the last piece of Phase 2's original
+  scope, built after a status check surfaced it was missing**:
+  `is_elevated()` (already running as root/Administrator?) and
+  `can_elevate()` (best-effort — root already, or a member of an
+  admin-capable group: `admin`/`sudo`/`wheel` on macOS/Linux via the
+  `grp` module; `IsUserAnAdmin()` on Windows, which only reflects current
+  elevation state, not group membership — deliberately not investing
+  further in Windows precision since it's out of scope until Phase 4).
+  Verified against this real machine's actual group membership (`admin`,
+  confirmed via `groups`) before trusting it: `is_elevated() == False`,
+  `can_elevate() == True`, both correct.
+  - `plan_node` calls `can_elevate()` alongside OS detection; if false,
+    emits a `cannot_elevate` warning event (rendered by `cli.py`) *and*
+    folds a note into the same single planning call telling the model to
+    avoid elevation-requiring steps where a non-privileged alternative
+    exists, rather than silently discovering a permission failure
+    several steps into a run.
+  - Covered by `tests/test_permissions.py` (5 cases: elevated/not,
+    admin-group/not, monkeypatched rather than relying on this specific
+    machine's real state so the tests are portable) and
+    `tests/test_graph.py::test_plan_prompt_warns_the_model_when_user_cannot_elevate`.
 
-Next concrete step: Phase 2 — full `os_detect.py`, the doc fetcher +
-cache described above, and the first real (non-freeform, doc-grounded)
-recipe: Flutter on macOS, end-to-end, including a `select` HITL for IDE
-choice.
+Not yet done: `.github/ISSUE_TEMPLATE/` and Discussions not set up;
+`checkbox` interrupt type is still implemented end-to-end but not yet
+exercised by any real plan content (only `select` has been, via the IDE
+choice above); LangSmith tracing needs no code (documented in README —
+env vars only) but hasn't been turned on and inspected yet; recipes exist
+for Flutter only, macOS only — Node/Python/Docker and Ubuntu are Phase 3.
+
+**Phase 2 is now fully complete** against its original scope (OS
+detection, doc fetcher, Flutter recipe end-to-end, `select` HITL,
+permissions checks).
+
+**`scripts/install.sh` (Phase 5 item, pulled forward) is built and
+verified**: a two-stage POSIX-sh bootstrap for a genuinely fresh
+macOS/Linux machine (nothing preinstalled but `curl`) — installs `uv`
+itself first if missing (a standalone binary download, needs no Python
+preinstalled), then `uv tool install`s the repo, which also handles
+getting the right Python version automatically. Verified live:
+`uv tool install git+https://github.com/adityapandey410/envagent`
+actually installs and produces a working `envagent` command.
+**Important caveat surfaced by that verification**: it only worked
+because the author's local `git` is authenticated to this **private**
+repo (via `gh auth setup-git`) — it will not work for anyone else until
+the repo is made public, or envagent is published to PyPI instead (which
+needs no repo-level auth at all, since it's a public registry). Windows
+isn't covered by this script — Phase 4 scope, same as everywhere else;
+a Windows user would need uv's separate PowerShell installer.
+
+Next concrete step: Phase 3 — expand recipes to Node/Python/Docker, add
+Ubuntu support. (Making the repo public, or publishing to PyPI, is a
+separate decision needed before `install.sh` is actually usable by
+anyone else — not yet decided.)

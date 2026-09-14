@@ -29,3 +29,8 @@ class AgentState(TypedDict):
     verdict on whether the goal was actually achieved (not just whether
     every command exited 0). Absent on a 'failed' run: that path is
     already an honest signal on its own."""
+
+    ide_choice: NotRequired[str]
+    """Set by plan_node when a matched recipe declares an ide_choice and
+    the user has answered its select interrupt. Persisted so a resumed
+    run doesn't ask again."""

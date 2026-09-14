@@ -47,9 +47,6 @@ def load_settings() -> Settings:
 
 
 def save_settings(settings: Settings) -> None:
-    # TOML has no null type — omit unset fields rather than error on them.
-    # (E.g. `active_thread_id` gets written into `extra` before `provider`
-    # is ever set, if setup/resume run before init.)
     data = {key: value for key, value in asdict(settings).items() if value is not None}
     with config_file().open("wb") as f:
         tomli_w.dump(data, f)
