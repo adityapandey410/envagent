@@ -1,8 +1,4 @@
-"""Non-secret configuration: chosen provider, model, recipe cache location.
-
-Stored as TOML under the OS-appropriate user config directory (via
-platformdirs). API keys are never stored here — see credentials.py.
-"""
+"""Non-secret configuration, stored as TOML: chosen provider, model, recipe cache location."""
 
 from __future__ import annotations
 

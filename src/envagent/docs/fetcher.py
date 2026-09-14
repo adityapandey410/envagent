@@ -1,10 +1,4 @@
-"""Fetch and clean official documentation pages.
-
-Tries a page's markdown variant first (many modern docs sites, e.g.
-Flutter's, serve one at `<url>.md` — confirmed by fetching the real page
-before building this), which needs no HTML parsing at all. Falls back to
-basic HTML extraction for sites that don't offer that.
-"""
+"""Fetch and clean official documentation pages."""
 
 from __future__ import annotations
 
@@ -56,19 +50,7 @@ def fetch_doc(url: str) -> str:
 
 
 def extract_os_section(markdown: str, os_key: str) -> str:
-    """Extracts just the OS-relevant content from a doc page that tags
-    OS-specific blocks with a `{: .steps .<os>-only}` marker: each marker
-    retroactively labels the block of text immediately *before* it (the
-    Jekyll attribute-list convention — confirmed against the real
-    structure, not assumed). Content after the very last marker is
-    untagged/shared and always kept.
-
-    Known limitation: the text preceding the *first* marker is labeled by
-    that first marker's OS (e.g. shared framing like "choose your OS"
-    ends up bundled with whichever OS is listed first in the doc) — a
-    minor cosmetic loss for other OSes, not a correctness issue: the
-    actual OS-specific commands are still captured exactly.
-    """
+    """Keeps only blocks tagged `{: .steps .<os_key>-only}`; a marker labels the block before it."""
     matches = list(_OS_SECTION_MARKER.finditer(markdown))
     if not matches:
         return markdown

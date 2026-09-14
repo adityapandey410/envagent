@@ -68,9 +68,7 @@ def setup(
         ..., help="What to set up, e.g. 'set up flutter for android development'"
     ),
 ) -> None:
-    """Plan and execute an environment setup, pausing for confirmation
-    before any destructive step (Phase 1: freeform LLM planning, no
-    recipes/doc-grounding yet)."""
+    """Plan and execute an environment setup, pausing for confirmation before any destructive step."""
     graph = build_graph()
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
@@ -93,9 +91,7 @@ def setup(
 
 @app.command()
 def resume() -> None:
-    """Resume the most recent setup session that's paused on a HITL
-    interrupt — e.g. the terminal was closed or the process died while a
-    confirmation prompt was pending."""
+    """Resume the most recent setup session paused on a HITL interrupt."""
     settings = load_settings()
     thread_id = settings.extra.get("active_thread_id")
     if not thread_id:
@@ -119,17 +115,7 @@ def resume() -> None:
 
 
 def _drive_to_completion(graph, config: dict, stream_input) -> dict:
-    """Streams the graph node-by-node so every step is visible as it runs
-    (not just the ones needing HITL confirmation), handling any number of
-    interrupts along the way. Returns the final state once the graph
-    reaches a terminal status.
-
-    Two stream modes at once: 'custom' carries the real-time progress
-    events nodes push via get_stream_writer() (system info, the full
-    plan, each command as it starts, its output live, idempotency
-    skips) — 'updates' is only used to detect interrupts and a failed
-    verify, since the custom events already cover everything display-worthy.
-    """
+    """Streams the graph, rendering progress and resolving interrupts until a terminal state."""
     while True:
         interrupted = False
         for mode, chunk in graph.stream(stream_input, config, stream_mode=["custom", "updates"]):

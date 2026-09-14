@@ -1,10 +1,4 @@
-"""plan / execute / verify / judge node implementations.
-
-Phase 2: plan_node now checks the recipe registry (deterministic keyword
-match, no LLM call) before planning. A match grounds the single planning
-call in real, OS-extracted official doc content instead of pure model
-knowledge; no match falls back to Phase 1's freeform behavior unchanged.
-"""
+"""plan / execute / verify / judge node implementations."""
 
 from __future__ import annotations
 
@@ -291,11 +285,7 @@ def _build_judge_transcript(state: AgentState) -> str:
 
 
 def judge_node(state: AgentState) -> AgentState:
-    """Runs once, only on the 'done' path (every step executed without a
-    hard failure) — a single LLM call reviewing the whole run against the
-    goal. Exists because a command's exit code alone doesn't prove the
-    goal was achieved: `flutter doctor` exits 0 even while its own output
-    reports a missing Android SDK or incomplete Xcode install."""
+    """Reviews the completed run against the goal via one LLM call."""
     writer = get_stream_writer()
     writer({"type": "judging_start"})
     provider, api_key = _active_provider_and_key()

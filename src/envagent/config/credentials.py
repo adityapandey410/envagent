@@ -1,7 +1,4 @@
-"""API key storage via the OS keychain (Keychain/Credential Manager/libsecret).
-
-Keys never touch disk in plaintext.
-"""
+"""API key storage via the OS keychain."""
 
 from __future__ import annotations
 

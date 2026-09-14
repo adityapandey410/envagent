@@ -1,9 +1,4 @@
-"""Risk classification + typed HITL interrupt payloads.
-
-Produces *what* to ask, never *how* to ask it — cli.py is the only place
-that knows about terminals/questionary. See CLAUDE.md's HITL design
-section for the three interrupt kinds.
-"""
+"""Risk classification + typed HITL interrupt payloads."""
 
 from __future__ import annotations
 
@@ -19,9 +14,7 @@ class PlanStep(TypedDict):
     """If present and it exits 0, the step's goal is already satisfied —
     skip the install/command entirely rather than re-running it."""
     automatable: NotRequired[bool]
-    """Default True. False means this fundamentally cannot be done via a
-    CLI command (a GUI installer, an App Store login, a license
-    click-through) — 'command' is never executed in that case."""
+    """Default True. False = not scriptable via CLI; 'command' is never executed."""
     manual_instructions: NotRequired[str | None]
     """Human instructions shown to the user when automatable is False."""
 

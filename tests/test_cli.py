@@ -1,8 +1,4 @@
-"""CLI-level test that real-time per-step command visibility actually
-works, not just the underlying graph mechanics (already covered by
-test_graph.py). Uses Typer's CliRunner; questionary rendering is stubbed
-out since it needs a real TTY, which the test runner doesn't provide.
-"""
+"""CLI-level tests via Typer's CliRunner; questionary is stubbed since it needs a real TTY."""
 
 import json
 

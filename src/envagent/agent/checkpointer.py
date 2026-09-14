@@ -1,9 +1,4 @@
-"""Local, on-disk checkpointing for graph state — enables pausing on a HITL
-interrupt and resuming an interrupted setup later.
-
-Kept local-only (SQLite file under the user's data directory), consistent
-with the BYOK/no-backend principle: no external database required.
-"""
+"""SqliteSaver setup for graph checkpointing."""
 
 from __future__ import annotations
 

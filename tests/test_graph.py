@@ -108,9 +108,7 @@ def test_step_already_satisfied_is_skipped_without_hitl(monkeypatch, tmp_path):
 
 
 def test_resume_works_from_a_freshly_built_graph_instance(monkeypatch, tmp_path):
-    """Simulates the terminal-closed-while-paused scenario: the graph
-    object that hit the interrupt is discarded entirely, and a brand new
-    one (same checkpoint DB, same thread_id) picks the run back up."""
+    """Discards the graph that paused and resumes from a fresh instance."""
     _patch_env(monkeypatch, tmp_path)
     config = {"configurable": {"thread_id": "resume-thread"}}
 

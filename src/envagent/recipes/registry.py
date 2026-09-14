@@ -1,9 +1,4 @@
-"""Loads vetted setup recipes and matches a goal against them.
-
-Matching is deterministic keyword matching, not an LLM call — this keeps
-planning at exactly one call for recipe-covered goals too, same as the
-freeform path (see CLAUDE.md's token-cost discussion).
-"""
+"""Loads vetted setup recipes and matches a goal against them by keyword, no LLM call."""
 
 from __future__ import annotations
 

@@ -1,8 +1,4 @@
-"""Provider abstraction: one interface, one implementation per LLM vendor.
-
-Kept intentionally thin (no chains/frameworks) so each provider's SDK is
-called directly and behavior stays auditable.
-"""
+"""Provider abstraction: one interface, one implementation per LLM vendor."""
 
 from __future__ import annotations
 
@@ -20,15 +16,10 @@ class Provider(ABC):
 
     @abstractmethod
     def validate_key(self, api_key: str) -> None:
-        """Make a cheap, side-effect-free call to confirm the key works.
-
-        Raises ProviderAuthError on failure. Returns None on success.
-        """
+        """Cheap, side-effect-free call; raises ProviderAuthError on failure."""
         raise NotImplementedError
 
     @abstractmethod
     def complete(self, api_key: str, system: str, user: str) -> str:
-        """Single-turn text completion. Raises ProviderAuthError on an
-        auth failure so callers can trigger a re-auth flow uniformly.
-        """
+        """Single-turn text completion; raises ProviderAuthError on an auth failure."""
         raise NotImplementedError

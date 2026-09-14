@@ -1,12 +1,4 @@
-"""sudo/admin/UAC permission checks.
-
-Purpose: know upfront whether the current user can even run privileged
-commands, so the agent can warn before planning rather than have a plan
-fail with a permission error several steps in. Best-effort — permission
-models differ enough across OSes that this is a heuristic, not a
-guarantee (e.g. sudo can be configured in ways group membership alone
-doesn't capture).
-"""
+"""sudo/admin/UAC permission checks."""
 
 from __future__ import annotations
 
@@ -28,9 +20,7 @@ def is_elevated() -> bool:
 
 
 def can_elevate() -> bool:
-    """Best-effort: can the current user run privileged commands at all
-    (sudo on macOS/Linux, an elevated prompt on Windows)? Already being
-    elevated counts as yes."""
+    """Can the current user run privileged commands at all?"""
     if is_elevated():
         return True
     if platform.system() == "Windows":

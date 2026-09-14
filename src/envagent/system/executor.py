@@ -1,10 +1,4 @@
-"""Subprocess execution wrapped with logging + an undo-log entry per step.
-
-All command logging happens here, not scattered at call sites, so every
-executed command is auditable in one place regardless of which graph node
-triggered it. Each log line also carries the step's undo command (if the
-plan declared one) — the basis for a future `envagent undo` (Phase 5).
-"""
+"""Subprocess execution wrapped with logging + an undo-log entry per step."""
 
 from __future__ import annotations
 
@@ -38,8 +32,7 @@ class ExecutionResult:
     started_at: float
     finished_at: float
     kind: str = "execute"
-    """'execute' (the step's real command ran) or 'check' (an idempotency
-    pre-check ran instead)."""
+    """'execute' or 'check'."""
 
     @property
     def succeeded(self) -> bool:
@@ -49,11 +42,7 @@ class ExecutionResult:
 def _run_command(
     command: str, on_line: Callable[[str], None] | None = None
 ) -> tuple[int, str, str, float, float]:
-    """Runs a command and streams its output line-by-line to on_line as it
-    happens (real-time visibility), while still returning the full
-    captured output for logging. stdout/stderr are merged — a long-running
-    command (an install, a download) is otherwise indistinguishable from a
-    hang with no live output at all."""
+    """Streams output line-by-line via on_line while capturing it in full; stdout/stderr merged."""
     started_at = time.time()
     proc = subprocess.Popen(
         command,
@@ -92,8 +81,7 @@ def run(step: PlanStep, on_line: Callable[[str], None] | None = None) -> Executi
 
 
 def run_check(command: str, on_line: Callable[[str], None] | None = None) -> ExecutionResult:
-    """Run a step's idempotency check_command. Logged like any other
-    executed command, tagged kind='check' for auditability."""
+    """Run a step's check_command, logged with kind='check'."""
     returncode, stdout, stderr, started_at, finished_at = _run_command(command, on_line)
     result = ExecutionResult(
         command=command,

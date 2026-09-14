@@ -1,11 +1,4 @@
-"""OS/arch/package-manager detection.
-
-Replaces the Phase-1 stopgap (nodes._describe_os, a plain string) with
-structured detection. The `os_key` is the important addition: it matches
-the OS-selector class-naming convention used by real docs sites (e.g.
-Flutter's `{: .steps .macos-only}` markers), so doc extraction can key
-off the same value used for planning.
-"""
+"""OS/arch/package-manager detection."""
 
 from __future__ import annotations
 
@@ -27,14 +20,12 @@ _CANDIDATE_MANAGERS: dict[str, list[str]] = {
 @dataclass
 class SystemInfo:
     os_key: str
-    """Canonical key: 'macos' | 'linux' | 'windows' (falls back to the
-    lowercased platform.system() value on anything else)."""
+    """'macos' | 'linux' | 'windows'."""
     os_name: str
     arch: str
     release: str
     package_managers: list[str]
-    """Which candidate package managers are actually on PATH, in
-    preference order. May be empty (e.g. a fresh Linux box with none)."""
+    """Candidate managers actually on PATH, in preference order."""
 
     def describe(self) -> str:
         pm = f", package manager: {self.package_managers[0]}" if self.package_managers else ""

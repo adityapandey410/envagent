@@ -1,11 +1,4 @@
-"""Runs the eval scenarios in evals/scenarios/ as a regression suite.
-
-Plain pytest, not promptfoo: promptfoo would pull in a whole separate
-Node.js toolchain for a pure-Python project, which isn't worth it for
-scenarios that (so far) test deterministic logic rather than live model
-output. Revisit if/when scenarios need to assert on actual LLM-generated
-plans rather than the risk-gating logic itself.
-"""
+"""Runs the eval scenarios in evals/scenarios/ as a regression suite."""
 
 import json
 from pathlib import Path

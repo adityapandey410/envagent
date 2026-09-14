@@ -1,15 +1,4 @@
-"""LangGraph graph definition: plan -> execute -> verify -> (loop | judge | end).
-
-execute_node raises a LangGraph interrupt() before running a
-destructive step; the checkpointer persists state at that pause point so
-the run can be resumed (even after the process exits) once the interrupt
-is answered.
-
-judge_node runs once, only when every step completed without a hard
-failure ('done') — it reviews the whole run against the goal, since exit
-codes alone don't prove success (see nodes.py docstring). A declined/
-failed run skips straight to END: that path is already an honest signal.
-"""
+"""LangGraph graph: plan -> execute -> verify -> (loop | judge | end)."""
 
 from __future__ import annotations
 

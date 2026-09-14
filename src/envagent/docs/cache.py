@@ -1,5 +1,4 @@
-"""Local cache for fetched documentation pages — avoids refetching the
-same recipe doc on every `setup` run."""
+"""Local cache for fetched documentation pages, keyed by URL."""
 
 from __future__ import annotations
 
