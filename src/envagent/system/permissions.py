@@ -1,5 +1,3 @@
-"""sudo/admin/UAC permission checks."""
-
 from __future__ import annotations
 
 import ctypes
@@ -10,7 +8,6 @@ _ADMIN_GROUP_NAMES = {"admin", "sudo", "wheel"}
 
 
 def is_elevated() -> bool:
-    """Is the current process already running as root/Administrator?"""
     if platform.system() == "Windows":
         try:
             return bool(ctypes.windll.shell32.IsUserAnAdmin())
@@ -20,7 +17,6 @@ def is_elevated() -> bool:
 
 
 def can_elevate() -> bool:
-    """Can the current user run privileged commands at all?"""
     if is_elevated():
         return True
     if platform.system() == "Windows":

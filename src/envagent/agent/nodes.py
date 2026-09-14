@@ -1,5 +1,3 @@
-"""plan / execute / verify / judge node implementations."""
-
 from __future__ import annotations
 
 import json

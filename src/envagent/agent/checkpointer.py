@@ -1,5 +1,3 @@
-"""SqliteSaver setup for graph checkpointing."""
-
 from __future__ import annotations
 
 import sqlite3

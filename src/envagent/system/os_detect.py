@@ -1,5 +1,3 @@
-"""OS/arch/package-manager detection."""
-
 from __future__ import annotations
 
 import platform

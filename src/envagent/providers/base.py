@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 
 
 class ProviderAuthError(Exception):
-    """Raised when an API key fails validation against the provider."""
+    pass
 
 
 class Provider(ABC):

@@ -108,7 +108,6 @@ def test_step_already_satisfied_is_skipped_without_hitl(monkeypatch, tmp_path):
 
 
 def test_resume_works_from_a_freshly_built_graph_instance(monkeypatch, tmp_path):
-    """Discards the graph that paused and resumes from a fresh instance."""
     _patch_env(monkeypatch, tmp_path)
     config = {"configurable": {"thread_id": "resume-thread"}}
 

@@ -1,5 +1,3 @@
-"""Local cache for fetched documentation pages, keyed by URL."""
-
 from __future__ import annotations
 
 import hashlib

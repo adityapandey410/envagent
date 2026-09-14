@@ -1,5 +1,3 @@
-"""Graph state schema."""
-
 from __future__ import annotations
 
 from typing import NotRequired, TypedDict
@@ -25,12 +23,7 @@ class AgentState(TypedDict):
     """Serialized ExecutionResult per completed step, in order."""
 
     assessment: NotRequired[Assessment]
-    """Set by judge_node only on the 'done' path — an honest, LLM-reviewed
-    verdict on whether the goal was actually achieved (not just whether
-    every command exited 0). Absent on a 'failed' run: that path is
-    already an honest signal on its own."""
+    """Set by judge_node; absent on a 'failed' run."""
 
     ide_choice: NotRequired[str]
-    """Set by plan_node when a matched recipe declares an ide_choice and
-    the user has answered its select interrupt. Persisted so a resumed
-    run doesn't ask again."""
+    """Set by plan_node once the recipe's select interrupt is answered."""

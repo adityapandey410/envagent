@@ -1,5 +1,3 @@
-"""Runs the eval scenarios in evals/scenarios/ as a regression suite."""
-
 import json
 from pathlib import Path
 
