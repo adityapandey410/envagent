@@ -13,11 +13,11 @@ from envagent.agent.prompts import JUDGE_SYSTEM_PROMPT, PLAN_SYSTEM_PROMPT
 from envagent.agent.state import Assessment, AgentState
 from envagent.config.credentials import get_api_key
 from envagent.config.settings import load_settings
-from envagent.docs.fetcher import extract_os_section, fetch_doc
+from envagent.docs.fetcher import extract_os_section, extract_section, fetch_doc
 from envagent.hitl.gate import classify_step, is_diagnostic_step
 from envagent.providers.base import Provider
 from envagent.providers.registry import get_provider
-from envagent.recipes.registry import match_recipe
+from envagent.recipes.registry import match_recipe, resolve_doc_url
 from envagent.system.executor import ExecutionResult
 from envagent.system.executor import run as run_command
 from envagent.system.executor import run_check
@@ -90,14 +90,18 @@ def plan_node(state: AgentState) -> AgentState:
                     "options": recipe.ide_choice.options,
                 }
             )
-        doc_content = fetch_doc(recipe.doc_url)
-        os_section = extract_os_section(doc_content, system_info.os_key)[:_MAX_GROUNDING_CHARS]
-        grounding = (
-            f"\n\nOfficial documentation excerpt for {recipe.name} "
-            f"({system_info.os_key}):\n{os_section}"
-        )
-        if ide_choice:
-            grounding += f"\n\nThe user chose {ide_choice} as their IDE."
+        doc_url = resolve_doc_url(recipe, system_info.os_key)
+        if doc_url is not None:
+            doc_content = fetch_doc(doc_url)
+            if recipe.doc_section:
+                doc_content = extract_section(doc_content, recipe.doc_section)
+            os_section = extract_os_section(doc_content, system_info.os_key)[:_MAX_GROUNDING_CHARS]
+            grounding = (
+                f"\n\nOfficial documentation excerpt for {recipe.name} "
+                f"({system_info.os_key}):\n{os_section}"
+            )
+            if ide_choice:
+                grounding += f"\n\nThe user chose {ide_choice} as their IDE."
 
     elevation_note = (
         ""

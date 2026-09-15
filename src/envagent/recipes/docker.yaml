@@ -1,0 +1,8 @@
+name: docker
+aliases:
+  - docker
+  - docker desktop
+  - docker engine
+doc_url:
+  macos: https://docs.docker.com/desktop/setup/install/mac-install/
+  linux: https://docs.docker.com/engine/install/ubuntu/

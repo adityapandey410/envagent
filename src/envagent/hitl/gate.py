@@ -38,6 +38,7 @@ _DESTRUCTIVE_PATTERNS = (
     "| bash",
     "chmod",
     "chown",
+    "usermod",
     "systemctl",
     "regedit",
     "diskutil",
@@ -69,6 +70,7 @@ _DIAGNOSTIC_PATTERNS = (
     "check setup",
     "verify setup",
     "verify installation",
+    "pip check",
 )
 
 

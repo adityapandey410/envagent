@@ -1,0 +1,7 @@
+name: python
+aliases:
+  - python
+  - python3
+  - pyenv
+doc_url: https://raw.githubusercontent.com/pyenv/pyenv/master/README.md
+doc_section: "Installation"

@@ -1,0 +1,17 @@
+{
+  "description": "Regression scenarios for deterministic recipe matching: a goal naming a known stack must match its vetted recipe (no LLM call), and an unrelated goal must fall back to freeform planning (no match).",
+  "cases": [
+    {"goal": "set up flutter for android development", "expected_recipe": "flutter"},
+    {"goal": "install dart sdk", "expected_recipe": "flutter"},
+    {"goal": "install node", "expected_recipe": "node"},
+    {"goal": "set up nodejs for backend development", "expected_recipe": "node"},
+    {"goal": "install npm", "expected_recipe": "node"},
+    {"goal": "install python", "expected_recipe": "python"},
+    {"goal": "set up python3 for data science", "expected_recipe": "python"},
+    {"goal": "install pyenv", "expected_recipe": "python"},
+    {"goal": "install docker", "expected_recipe": "docker"},
+    {"goal": "set up docker desktop for local development", "expected_recipe": "docker"},
+    {"goal": "what is the capital of France?", "expected_recipe": null},
+    {"goal": "set up a rust toolchain", "expected_recipe": null}
+  ]
+}

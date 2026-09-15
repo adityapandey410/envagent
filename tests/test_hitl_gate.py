@@ -41,3 +41,19 @@ def test_flutter_doctor_style_step_is_recognized_as_diagnostic():
 def test_an_ordinary_install_step_is_not_flagged_diagnostic():
     step = _step("brew install --cask flutter")
     assert is_diagnostic_step(step) is False
+
+
+def test_usermod_group_change_is_gated():
+    step = _step("sudo usermod -aG docker $USER")
+    interrupt = classify_step(step)
+    assert interrupt is not None
+
+
+def test_pip_check_is_recognized_as_diagnostic():
+    step = PlanStep(
+        description="Verify installed packages have compatible dependencies",
+        command="pip check",
+        risk="safe",
+        undo_command=None,
+    )
+    assert is_diagnostic_step(step) is True

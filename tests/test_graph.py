@@ -312,10 +312,11 @@ class _FakeIdeChoice:
 
 
 class _FakeRecipe:
-    def __init__(self, name, doc_url, ide_choice=None):
+    def __init__(self, name, doc_url, ide_choice=None, doc_section=None):
         self.name = name
         self.doc_url = doc_url
         self.ide_choice = ide_choice
+        self.doc_section = doc_section
 
 
 def _patch_recipe_and_docs(monkeypatch, recipe, doc_content="fake doc content"):
@@ -323,6 +324,9 @@ def _patch_recipe_and_docs(monkeypatch, recipe, doc_content="fake doc content"):
     monkeypatch.setattr("envagent.agent.nodes.fetch_doc", lambda url: doc_content)
     monkeypatch.setattr(
         "envagent.agent.nodes.extract_os_section", lambda content, os_key: content
+    )
+    monkeypatch.setattr(
+        "envagent.agent.nodes.extract_section", lambda content, heading: content
     )
 
 
@@ -371,6 +375,149 @@ def test_recipe_match_grounds_the_planning_prompt_in_fetched_doc_content(monkeyp
     graph.invoke({"goal": "install flutter", "status": "planning"}, config)
 
     assert any("UNIQUE_MARKER_FROM_REAL_DOCS" in p for p in captured_prompts)
+
+
+def test_recipe_with_per_os_doc_url_dict_fetches_the_right_url(monkeypatch, tmp_path):
+    captured_prompts = []
+    fetched_urls = []
+
+    class _CapturingProvider:
+        def complete(self, api_key, system, user):
+            captured_prompts.append(user)
+            return json.dumps(PLAN)
+
+    monkeypatch.setattr(
+        "envagent.agent.checkpointer.user_data_dir", lambda _app: str(tmp_path / "data")
+    )
+    monkeypatch.setattr(
+        "envagent.system.executor.user_log_dir", lambda _app: str(tmp_path / "logs")
+    )
+    monkeypatch.setattr(
+        "envagent.agent.nodes._active_provider_and_key",
+        lambda: (_CapturingProvider(), "fake-key"),
+    )
+    recipe = _FakeRecipe(
+        name="docker",
+        doc_url={"macos": "https://example.com/mac", "linux": "https://example.com/ubuntu"},
+        ide_choice=None,
+    )
+    monkeypatch.setattr("envagent.agent.nodes.match_recipe", lambda goal: recipe)
+    monkeypatch.setattr(
+        "envagent.agent.nodes.fetch_doc",
+        lambda url: fetched_urls.append(url) or f"content for {url}",
+    )
+    monkeypatch.setattr(
+        "envagent.agent.nodes.extract_os_section", lambda content, os_key: content
+    )
+    monkeypatch.setattr(
+        "envagent.agent.nodes.extract_section", lambda content, heading: content
+    )
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "recipe-dict-doc-url"}}
+
+    graph.invoke({"goal": "install docker", "status": "planning"}, config)
+
+    # This suite runs on macOS, so detect_system() reports os_key="macos" for real.
+    assert fetched_urls == ["https://example.com/mac"]
+    assert any("content for https://example.com/mac" in p for p in captured_prompts)
+
+
+def test_node_recipe_match_grounds_the_planning_prompt(monkeypatch, tmp_path):
+    captured_prompts = []
+
+    class _CapturingProvider:
+        def complete(self, api_key, system, user):
+            captured_prompts.append(user)
+            return json.dumps(PLAN)
+
+    monkeypatch.setattr(
+        "envagent.agent.checkpointer.user_data_dir", lambda _app: str(tmp_path / "data")
+    )
+    monkeypatch.setattr(
+        "envagent.system.executor.user_log_dir", lambda _app: str(tmp_path / "logs")
+    )
+    monkeypatch.setattr(
+        "envagent.agent.nodes._active_provider_and_key",
+        lambda: (_CapturingProvider(), "fake-key"),
+    )
+    recipe = _FakeRecipe(
+        name="node",
+        doc_url="https://example.com/nvm-readme",
+        ide_choice=None,
+        doc_section="Install & Update Script",
+    )
+    _patch_recipe_and_docs(monkeypatch, recipe, doc_content="UNIQUE_NODE_DOC_CONTENT")
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "node-recipe"}}
+
+    graph.invoke({"goal": "install node", "status": "planning"}, config)
+
+    assert any("UNIQUE_NODE_DOC_CONTENT" in p for p in captured_prompts)
+
+
+def test_python_recipe_match_grounds_the_planning_prompt(monkeypatch, tmp_path):
+    captured_prompts = []
+
+    class _CapturingProvider:
+        def complete(self, api_key, system, user):
+            captured_prompts.append(user)
+            return json.dumps(PLAN)
+
+    monkeypatch.setattr(
+        "envagent.agent.checkpointer.user_data_dir", lambda _app: str(tmp_path / "data")
+    )
+    monkeypatch.setattr(
+        "envagent.system.executor.user_log_dir", lambda _app: str(tmp_path / "logs")
+    )
+    monkeypatch.setattr(
+        "envagent.agent.nodes._active_provider_and_key",
+        lambda: (_CapturingProvider(), "fake-key"),
+    )
+    recipe = _FakeRecipe(
+        name="python",
+        doc_url="https://example.com/pyenv-readme",
+        ide_choice=None,
+        doc_section="Installation",
+    )
+    _patch_recipe_and_docs(monkeypatch, recipe, doc_content="UNIQUE_PYTHON_DOC_CONTENT")
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "python-recipe"}}
+
+    graph.invoke({"goal": "install python", "status": "planning"}, config)
+
+    assert any("UNIQUE_PYTHON_DOC_CONTENT" in p for p in captured_prompts)
+
+
+def test_docker_recipe_match_grounds_the_planning_prompt(monkeypatch, tmp_path):
+    captured_prompts = []
+
+    class _CapturingProvider:
+        def complete(self, api_key, system, user):
+            captured_prompts.append(user)
+            return json.dumps(PLAN)
+
+    monkeypatch.setattr(
+        "envagent.agent.checkpointer.user_data_dir", lambda _app: str(tmp_path / "data")
+    )
+    monkeypatch.setattr(
+        "envagent.system.executor.user_log_dir", lambda _app: str(tmp_path / "logs")
+    )
+    monkeypatch.setattr(
+        "envagent.agent.nodes._active_provider_and_key",
+        lambda: (_CapturingProvider(), "fake-key"),
+    )
+    recipe = _FakeRecipe(
+        name="docker",
+        doc_url={"macos": "https://example.com/mac", "linux": "https://example.com/ubuntu"},
+        ide_choice=None,
+    )
+    _patch_recipe_and_docs(monkeypatch, recipe, doc_content="UNIQUE_DOCKER_DOC_CONTENT")
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "docker-recipe"}}
+
+    graph.invoke({"goal": "install docker", "status": "planning"}, config)
+
+    assert any("UNIQUE_DOCKER_DOC_CONTENT" in p for p in captured_prompts)
 
 
 def test_plan_prompt_warns_the_model_when_user_cannot_elevate(monkeypatch, tmp_path):

@@ -9,6 +9,7 @@
     {"command": "flutter doctor", "risk": "safe", "expect_gated": false},
     {"command": "flutter --version", "risk": "safe", "expect_gated": false},
     {"command": "echo $PATH", "risk": "safe", "expect_gated": false},
-    {"command": "anything", "risk": "destructive", "expect_gated": true}
+    {"command": "anything", "risk": "destructive", "expect_gated": true},
+    {"command": "sudo usermod -aG docker $USER", "risk": "safe", "expect_gated": true}
   ]
 }

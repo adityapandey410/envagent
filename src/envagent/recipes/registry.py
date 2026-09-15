@@ -20,7 +20,13 @@ class IdeChoice:
 class Recipe:
     name: str
     aliases: list[str]
-    doc_url: str
+    doc_url: str | dict[str, str]
+    """A single doc page (Flutter-style, OS-tab markers within one page), or
+    a mapping of os_key -> URL for sites that split OS instructions across
+    separate pages (e.g. Docker)."""
+    doc_section: str | None = None
+    """Optional Markdown heading to narrow a long doc (e.g. a version
+    manager's README) down to its install section before grounding."""
     ide_choice: IdeChoice | None = None
 
 
@@ -31,8 +37,17 @@ def _load_recipe(path: Path) -> Recipe:
         name=data["name"],
         aliases=data.get("aliases") or [data["name"]],
         doc_url=data["doc_url"],
+        doc_section=data.get("doc_section"),
         ide_choice=ide_choice,
     )
+
+
+def resolve_doc_url(recipe: Recipe, os_key: str) -> str | None:
+    """Pick the right doc URL for this OS. Returns None if the recipe's
+    doc_url is a per-OS mapping that doesn't cover this OS yet."""
+    if isinstance(recipe.doc_url, dict):
+        return recipe.doc_url.get(os_key)
+    return recipe.doc_url
 
 
 def load_recipes() -> list[Recipe]:

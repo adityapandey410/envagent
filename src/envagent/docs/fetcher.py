@@ -47,6 +47,61 @@ def fetch_doc(url: str) -> str:
     return content
 
 
+def _heading_level(stripped_line: str) -> int | None:
+    """Level of an ATX heading (1-6), or None if the line isn't one."""
+    if not stripped_line.startswith("#"):
+        return None
+    hashes = len(stripped_line) - len(stripped_line.lstrip("#"))
+    rest = stripped_line[hashes:]
+    if hashes > 6 or (rest and not rest[0].isspace()):
+        return None  # e.g. a "#" inside a code comment like "#!/bin/bash", not a heading
+    return hashes
+
+
+def extract_section(markdown: str, heading: str) -> str:
+    """Keeps one Markdown section (an ATX `heading` up to the next heading
+    of equal-or-shallower level). Falls back to the full input if `heading`
+    isn't found — same graceful-degradation pattern as extract_os_section.
+    Ignores lines inside fenced code blocks, so a shell comment like
+    `# Use bash` in an example snippet is never mistaken for a heading."""
+    lines = markdown.splitlines()
+    start = None
+    level = None
+    in_code_fence = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_code_fence = not in_code_fence
+            continue
+        if in_code_fence:
+            continue
+        line_level = _heading_level(stripped)
+        if line_level is None:
+            continue
+        text = stripped.lstrip("#").strip()
+        if text.lower() == heading.lower():
+            start = i
+            level = line_level
+            break
+    if start is None:
+        return markdown
+
+    end = len(lines)
+    in_code_fence = False
+    for j in range(start + 1, len(lines)):
+        stripped = lines[j].strip()
+        if stripped.startswith("```"):
+            in_code_fence = not in_code_fence
+            continue
+        if in_code_fence:
+            continue
+        j_level = _heading_level(stripped)
+        if j_level is not None and j_level <= level:
+            end = j
+            break
+    return "\n".join(lines[start:end]).strip()
+
+
 def extract_os_section(markdown: str, os_key: str) -> str:
     """Keeps only blocks tagged `{: .steps .<os_key>-only}`; a marker labels the block before it."""
     matches = list(_OS_SECTION_MARKER.finditer(markdown))

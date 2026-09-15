@@ -1,0 +1,8 @@
+name: node
+aliases:
+  - node
+  - nodejs
+  - node.js
+  - npm
+doc_url: https://raw.githubusercontent.com/nvm-sh/nvm/master/README.md
+doc_section: "Install & Update Script"

@@ -779,8 +779,7 @@ Not yet done: `.github/ISSUE_TEMPLATE/` and Discussions not set up;
 `checkbox` interrupt type is still implemented end-to-end but not yet
 exercised by any real plan content (only `select` has been, via the IDE
 choice above); LangSmith tracing needs no code (documented in README —
-env vars only) but hasn't been turned on and inspected yet; recipes exist
-for Flutter only, macOS only — Node/Python/Docker and Ubuntu are Phase 3.
+env vars only) but hasn't been turned on and inspected yet.
 
 **Phase 2 is now fully complete** against its original scope (OS
 detection, doc fetcher, Flutter recipe end-to-end, `select` HITL,
@@ -802,7 +801,116 @@ needs no repo-level auth at all, since it's a public registry). Windows
 isn't covered by this script — Phase 4 scope, same as everywhere else;
 a Windows user would need uv's separate PowerShell installer.
 
-Next concrete step: Phase 3 — expand recipes to Node/Python/Docker, add
-Ubuntu support. (Making the repo public, or publishing to PyPI, is a
-separate decision needed before `install.sh` is actually usable by
-anyone else — not yet decided.)
+**Phase 3 (Node/Python/Docker recipes + Ubuntu support) is complete**,
+and — unlike the "just add a YAML file" optimism in the recipes-first
+principle above — needed two small, generic schema/code additions,
+discovered by fetching the real target doc sites live before trusting
+Flutter's approach would just work, same discipline as every prior phase:
+
+- **`docs.flutter.dev`'s Jekyll marker convention
+  (`{: .steps .<os>-only}`) turned out to be Flutter-specific** —
+  nodejs.org's package-manager page is client-rendered (no static
+  per-OS markup), python.org is mostly GUI installer links, and
+  docs.docker.com splits macOS/Ubuntu across **separate URLs** rather
+  than one marker-tagged page. So:
+  - `recipes/registry.py::Recipe.doc_url` is now `str | dict[str, str]`
+    — a plain string (Flutter-style, one page) or an `{os_key: url}`
+    mapping for sites like Docker with genuinely separate per-OS pages.
+    A new `resolve_doc_url(recipe, os_key)` picks the right one; YAML
+    parses a mapping natively, so `_load_recipe` needed no real change.
+    Returns `None` for an OS the recipe doesn't cover yet (e.g. Windows)
+    — `plan_node` skips grounding entirely in that case rather than
+    fetching garbage, same as a no-recipe-match.
+  - Node and Python are instead grounded in **nvm** and **pyenv**'s
+    GitHub READMEs — both turned out to have a single install command
+    that's *already identical across macOS and Linux* (no OS branching
+    needed at all), a better fit than either official site. But both
+    READMEs are long (nvm's ~1200 lines), so naively truncating from the
+    top (the existing `_MAX_GROUNDING_CHARS` behavior) would hand the
+    model badges/table-of-contents instead of install steps. Fixed with
+    a new, generic `docs/fetcher.py::extract_section(markdown, heading)`
+    — slices one ATX-heading section out of a larger doc, same
+    graceful-degradation pattern as `extract_os_section` (heading not
+    found → returns input unchanged). `Recipe` gained an optional
+    `doc_section` field; `plan_node` applies it (when set) right after
+    `fetch_doc`, before the existing OS-section/truncation steps.
+- **A real bug caught by testing `extract_section` against the actual
+  nvm README, not just a synthetic fixture**: nvm's install section
+  contains a fenced shell example with the comment
+  `# Use bash for the shell` — `extract_section`'s first version treated
+  that `#`-prefixed line as a level-1 Markdown heading and cut the
+  section off after ~2 lines instead of the real ~160-line section.
+  Fixed by tracking fenced-code-block state (` ``` ` toggles) and
+  ignoring `#`-prefixed lines while inside one; verified against the
+  real README before and after the fix (2750 chars → 7647 chars, now
+  correctly spanning the whole Install & Update Script section).
+  Regression test: `tests/test_docs_fetcher.py::test_extract_section_ignores_hash_comments_inside_fenced_code_blocks`,
+  using a minimal fixture mirroring the exact real shape.
+- **Two `hitl/gate.py` gaps found by reading the gate against realistic
+  Docker/Python commands, not assumed**: `usermod` added to
+  `_DESTRUCTIVE_PATTERNS` (`usermod -aG docker $USER`, a routine
+  security-relevant Docker post-install step, was previously ungated by
+  any keyword); `"pip check"` added to `_DIAGNOSTIC_PATTERNS` (this
+  project's own lying-exit-code principle above names `pip check` by
+  example, but the existing patterns didn't literally match that
+  phrase).
+- **Three new recipes**: `recipes/node.yaml` (aliases `node`/`nodejs`/
+  `node.js`/`npm`), `recipes/python.yaml` (aliases `python`/`python3`/
+  `pyenv`), `recipes/docker.yaml` (aliases `docker`/`docker desktop`/
+  `docker engine`, the first recipe using a dict `doc_url`). None have
+  an `ide_choice` — that concept is Flutter-specific.
+- **`evals/scenarios/recipe_matching.json`** — new scenario file
+  (`goal` → `expected_recipe`), since its shape differs from
+  `hitl_risk_gating.json`'s (`command`/`risk`/`expect_gated`). This
+  required a fix to `tests/test_evals.py`: the old
+  `test_hitl_risk_gating_scenarios` globbed *all* `evals/scenarios/*.json`
+  files and assumed every case had the gating shape — it would have
+  crashed on the new file. Now each scenario file has its own dedicated
+  test function.
+- **Verified live against real docs and a real provider, same bar as
+  Flutter** — for each recipe: fetched the real doc, confirmed
+  `extract_section`/`extract_os_section`/`resolve_doc_url` isolate the
+  right content (not just "ran without error"), then a real
+  `envagent setup "..."` run on this (macOS) dev machine. All three
+  produced plans clearly grounded in the real fetched doc content (e.g.
+  Node correctly used nvm's pinned install-script version and Xcode CLT
+  as a manual prerequisite; Python correctly chose the Homebrew path
+  documented for macOS over the generic curl script; Docker's command
+  sequence matched the real "Install from the command line" section —
+  `hdiutil attach`/`install --accept-license`/`hdiutil detach` —
+  verbatim). Every destructive step correctly triggered its `confirm`
+  gate and correctly refused to proceed without a real interactive
+  terminal (this session has none) — the real installs were deliberately
+  never approved, same as Flutter's Phase 1 verification.
+- **Linux path verified with a real provider call, not just unit tests**:
+  Docker isn't installed on this dev machine (expected — that's exactly
+  what the Docker recipe installs), so the plan's original "verify
+  inside a disposable Ubuntu container" step wasn't possible yet.
+  User's call (asked directly, since this was a genuine judgment call
+  rather than an obvious default): monkeypatch
+  `envagent.agent.nodes.detect_system` to report
+  `os_key="linux", package_managers=["apt"]` and run the real graph
+  against the real provider from there. Node's Linux plan correctly
+  dropped the macOS-only Xcode step and used the identical nvm
+  curl-install command; Docker's Linux plan correctly used the dict
+  `doc_url`'s `linux` entry and produced a real apt-repo-based sequence
+  (uninstall conflicting packages, set up Docker's apt repo + GPG key,
+  `apt install docker-ce ...`, `systemctl start docker`,
+  `docker run hello-world`) matching the real Ubuntu doc almost
+  verbatim. This confirms the dict-`doc_url` and OS-appropriate-planning
+  paths work for real, but is not the same as an actual Ubuntu
+  filesystem/package-manager run — revisit with a real container (or
+  real Ubuntu box) once Docker is actually installed, or once Phase 5's
+  CI matrix exists.
+
+Not yet done from the original Phase 3 scope: no full CI/container-based
+Ubuntu run (see above — deferred, not blocking, since it's Phase 5 scope
+per the roadmap anyway); `checkbox` interrupt type still unexercised by
+real content (unchanged from Phase 2 — none of the three new recipes
+needed one either).
+
+Next concrete step: not yet decided — candidates are Phase 4 (Windows)
+or resolving the `install.sh` public/PyPI distribution question below.
+(Making the repo public, or publishing to PyPI, is a separate decision
+needed before `install.sh` is actually usable by anyone else — not yet
+decided.)
