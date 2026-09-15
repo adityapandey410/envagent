@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import platform
 import subprocess
 import time
 from collections.abc import Callable
@@ -39,14 +40,23 @@ class ExecutionResult:
         return self.returncode == 0
 
 
+def _popen_args(command: str) -> list[str] | str:
+    """On Windows, run via PowerShell explicitly rather than letting `shell=True`
+    fall through to cmd.exe, which understands neither bash nor PowerShell syntax."""
+    if platform.system() == "Windows":
+        return ["powershell", "-NoProfile", "-NonInteractive", "-Command", command]
+    return command
+
+
 def _run_command(
     command: str, on_line: Callable[[str], None] | None = None
 ) -> tuple[int, str, str, float, float]:
     """Streams output line-by-line via on_line while capturing it in full; stdout/stderr merged."""
     started_at = time.time()
+    args = _popen_args(command)
     proc = subprocess.Popen(
-        command,
-        shell=True,
+        args,
+        shell=isinstance(args, str),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,

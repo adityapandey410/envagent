@@ -909,8 +909,140 @@ per the roadmap anyway); `checkbox` interrupt type still unexercised by
 real content (unchanged from Phase 2 — none of the three new recipes
 needed one either).
 
-Next concrete step: not yet decided — candidates are Phase 4 (Windows)
-or resolving the `install.sh` public/PyPI distribution question below.
-(Making the repo public, or publishing to PyPI, is a separate decision
-needed before `install.sh` is actually usable by anyone else — not yet
-decided.)
+**Phase 4 (Windows support) has a buildable-now subset done, with live
+verification explicitly incomplete** — unlike every prior phase, there is
+no Windows machine available yet (a friend has agreed to test it, but
+wasn't available this session). Per the user's own call, we built and
+unit-tested everything whose correctness doesn't depend on uncertain live
+Windows behavior, and deliberately deferred the one area where guessing
+wrong would be genuinely risky, rather than wait:
+
+- **`system/executor.py::_run_command` now branches on OS** — POSIX keeps
+  `subprocess.Popen(command, shell=True)` unchanged; Windows instead runs
+  `["powershell", "-NoProfile", "-NonInteractive", "-Command", command]`.
+  This fixes a real, confirmed problem: `shell=True` on Windows invokes
+  `cmd.exe`, which understands neither the bash syntax our real Phase 3
+  plans used (`export X=y && ...`, `$(...)`, heredocs) nor PowerShell
+  cmdlets (`winget`, `Test-Path`). Verified the branch doesn't disturb
+  the POSIX path with a fresh live `setup "install node"` run on macOS
+  after the change.
+- **`PLAN_SYSTEM_PROMPT` gained a PATH-persistence note.** Turned out to
+  be the *same* limitation POSIX already has (an `export`/`setx` inside
+  one step's subprocess doesn't persist to the next step's subprocess
+  either) — Phase 3's real Node plan already self-corrected by
+  re-sourcing nvm inside every step that needed it, so the fix is just
+  telling the model the same applies to `setx`/
+  `[Environment]::SetEnvironmentVariable` on Windows, not an architecture
+  change.
+- **`plan_node` gained two more OS-conditional notes**, same pattern as
+  the existing `elevation_note`: a `shell_note` on Windows telling the
+  model commands run via PowerShell specifically (not cmd.exe, not
+  bash — including that `&&`/`||` chaining isn't supported in Windows
+  PowerShell 5.1), and a `windows_elevation_note` — when the user isn't
+  currently elevated but can elevate via UAC, telling the model (and via
+  it, the user) that a permissions failure should be handled by reopening
+  the terminal as Administrator and running `envagent resume`, reusing
+  the already-built Phase-1 resume flow rather than inventing new
+  elevation-execution machinery.
+- **`recipes/registry.py::Recipe` gained `supported_os: list[str] |
+  None`**, folded into `resolve_doc_url` (an OS outside `supported_os` now
+  returns `None`, same as a per-OS dict missing that key). `node.yaml`/
+  `python.yaml` now set `supported_os: [macos, linux]` — nvm/pyenv
+  explicitly don't support native Windows (WSL/Git Bash only), and
+  without this, a Windows run would previously still fetch and
+  "authoritatively" ground the plan in their Unix-only install docs. A
+  new `recipe_unsupported_on_os` stream event fires instead (rendered by
+  `cli.py`), and `plan_node` falls back to freeform planning for that
+  case. **Live-verified** (`os_key` forced to `"windows"`, real provider
+  call): Node correctly skipped nvm's doc and produced a clean
+  `winget install -e --id OpenJS.NodeJS.LTS` freeform plan instead — no
+  leftover bash syntax.
+- **`docker.yaml` gained a real `windows` doc URL** —
+  `docs.docker.com/desktop/setup/install/windows-install/`, verified live
+  to contain genuine CLI-installable content (a `"Docker Desktop
+  Installer.exe" install --user` vs. `install` per-user/all-user,
+  no-elevation/needs-elevation distinction). **Live-verified** (`os_key`
+  forced to `"windows"`, real provider call): produced a correctly
+  PowerShell-native plan (`Invoke-WebRequest`, `Start-Process -FilePath
+  ... -ArgumentList "install"`) grounded in the real download URL and
+  installer flags from that doc. One real, minor plan-quality issue
+  observed live (not an architecture bug, same category as Phase 1 item
+  11): the model's `check_command` for that run referenced a macOS-style
+  path — harmless (fails safely, just skips the idempotency shortcut),
+  not a systemic pattern worth a prompt change off one sample.
+- **`system/permissions.py::can_elevate()`'s Windows branch replaced** an
+  unconditional `False` (whenever not already elevated — overly
+  pessimistic, since it would tell the model "avoid elevation" even for a
+  Windows admin account that could elevate via UAC) with a real check:
+  local Administrators-group membership via the standard Win32
+  `CheckTokenMembership` approach against the well-known Administrators
+  SID (`S-1-5-32-544`), same `ctypes`-only style as the existing
+  `IsUserAnAdmin` call, no new dependency. **A real correctness bug was
+  caught and fixed before it ever ran**: the first version read
+  `CheckTokenMembership`'s output `BOOL` into a `ctypes.c_bool()` buffer
+  (1 byte) — Win32 `BOOL` is actually a 4-byte `int`, so the Win32 call
+  would have written 4 bytes into a 1-byte buffer. Fixed to `c_int()`
+  before ever being run, since there's no Windows machine to have caught
+  this by crashing.
+
+**Deliberately NOT built this pass — flagged as an open question for the
+live Windows test, not silently dropped**: automatic UAC re-elevation
+(actually spawning an elevated child process and executing a destructive
+step through it). There's no Windows equivalent of `sudo` — elevating a
+specific command means a *new* elevated process
+(`Start-Process -Verb RunAs`), and capturing that child's stdout back
+into our own streamed logging is a known rough edge (an elevated child
+doesn't share stdio with a non-elevated parent the way a plain `Popen`
+pipe does). Getting this wrong blind — without a machine to observe real
+elevated-child I/O behavior — risks a silently-broken elevation path that
+looks like it ran when it didn't, which is worse than not building it.
+The `windows_elevation_note` above (retry via `envagent resume` from an
+elevated terminal) is the deliberately conservative stand-in.
+
+**Also not built**: real Windows recipes for Node/Python (nvm-windows/
+pyenv-win are separate projects with their own doc sources — today's
+`supported_os` gap correctly marks this as unsupported rather than
+pretending it's covered; a follow-up once the current Windows path is
+verified end-to-end for real).
+
+**The repo is now public, and the first real live Windows test happened**
+(a friend's Windows 11 machine, `envagent setup "install flutter"`) — and
+the results were very good for a first real run:
+
+- OS/package-manager detection, the Flutter recipe's `select` HITL (IDE
+  choice), the doc-grounded plan itself (6 correctly PowerShell-only
+  steps — winget, `New-Item`, PATH, no bash/cmd.exe leftovers), the
+  `git --version` idempotency check-and-skip, the destructive-step
+  confirm gate, and — the single biggest unverified risk from this
+  phase — **real PowerShell command execution
+  (`New-Item -ItemType Directory ...`) actually ran and succeeded** on a
+  real machine. The non-automatable manual-step flow (Flutter SDK zip
+  download) also triggered and rendered correctly.
+- **One real bug found and fixed from that live run**: the "this user
+  can't run privileged commands" warning fired incorrectly for an
+  account confirmed to be a real Windows administrator. Root cause:
+  `_windows_is_admin_group_member()`'s `CheckTokenMembership` call
+  checked the *current* process token — under UAC, a non-elevated
+  process belonging to an admin user runs with a filtered/"limited"
+  token where the Administrators SID is present but disabled, so the
+  check correctly-by-the-API-but-wrongly-for-our-purposes reported "not
+  a member." This is exactly the "known Windows rough edge" flagged as
+  unverifiable without a real machine in this phase's original plan —
+  now confirmed real. Fixed in `system/permissions.py`: detect a limited
+  token via `GetTokenInformation(..., TokenElevationType, ...)` and, when
+  found, fetch its *linked* (full-rights) token via
+  `TokenLinkedToken` and check membership against that instead — the
+  documented Win32 pattern for exactly this UAC scenario. Not yet
+  re-verified live (fix landed after the friend's session ended) — next
+  test should confirm the warning no longer fires for their account.
+
+**Still open**: whether an actual UAC prompt / elevated step behaves as
+expected (the run stopped at a manual step before reaching one); full
+dialect correctness beyond one sampled plan; Node/Python Windows recipes;
+UAC re-elevation automation (still deliberately not built).
+
+Next concrete step: push this fix, have the friend reinstall
+(`uv tool install --force git+https://github.com/adityapandey410/envagent`)
+and re-run — confirm the elevation warning is gone and continue past the
+manual Flutter-SDK-download step to see the PATH-modification and verify
+steps run for real.

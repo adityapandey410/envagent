@@ -22,7 +22,7 @@ from envagent.system.executor import ExecutionResult
 from envagent.system.executor import run as run_command
 from envagent.system.executor import run_check
 from envagent.system.os_detect import detect_system
-from envagent.system.permissions import can_elevate
+from envagent.system.permissions import can_elevate, is_elevated
 
 
 class NotConfiguredError(RuntimeError):
@@ -102,6 +102,14 @@ def plan_node(state: AgentState) -> AgentState:
             )
             if ide_choice:
                 grounding += f"\n\nThe user chose {ide_choice} as their IDE."
+        else:
+            writer(
+                {
+                    "type": "recipe_unsupported_on_os",
+                    "name": recipe.name,
+                    "os_key": system_info.os_key,
+                }
+            )
 
     elevation_note = (
         ""
@@ -111,9 +119,26 @@ def plan_node(state: AgentState) -> AgentState:
         "alternative exists; where elevation is unavoidable, still include the step "
         "(it will be flagged to the user) rather than silently dropping it."
     )
+    windows_elevation_note = (
+        "\n\nNote: this user is on Windows, not currently running in an elevated "
+        "(Administrator) terminal, but can elevate via UAC. If a destructive step "
+        "fails with a permissions error, they should reopen their terminal as "
+        "Administrator and run `envagent resume` rather than retrying as-is."
+        if system_info.os_key == "windows" and elevation_ok and not is_elevated()
+        else ""
+    )
+    shell_note = (
+        "\n\nNote: on this system, commands are executed via PowerShell (not "
+        "cmd.exe, not bash). Use PowerShell syntax and cmdlets (e.g. `Test-Path`, "
+        "`winget install ...`), not POSIX shell syntax — no `&&`/`||` chaining "
+        "(unsupported in Windows PowerShell 5.1; use `;` or separate steps "
+        "instead), no heredocs, no `$(...)` command substitution."
+        if system_info.os_key == "windows"
+        else ""
+    )
     user_prompt = (
         f"Operating system: {system_info.describe()}\n\n"
-        f"Goal: {state['goal']}{grounding}{elevation_note}"
+        f"Goal: {state['goal']}{grounding}{elevation_note}{windows_elevation_note}{shell_note}"
     )
     raw = provider.complete(api_key, PLAN_SYSTEM_PROMPT, user_prompt)
     plan = _parse_plan(raw)

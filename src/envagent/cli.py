@@ -158,6 +158,11 @@ def _print_progress_event(event: dict) -> None:
         )
     elif kind == "recipe_matched":
         console.print(f"[dim]Using vetted recipe: {event['name']} (doc-grounded plan).[/dim]")
+    elif kind == "recipe_unsupported_on_os":
+        console.print(
+            f"[yellow]No vetted {event['name']} recipe for {event['os_key']} yet — "
+            "falling back to freeform (ungrounded) planning.[/yellow]"
+        )
     elif kind == "plan_ready":
         plan = event["plan"]
         console.print(f"[dim]Plan generated: {len(plan)} step(s).[/dim]")

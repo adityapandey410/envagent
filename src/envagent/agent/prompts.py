@@ -60,6 +60,14 @@ mechanisms for the same tool within one plan (e.g. do not install via \
 `brew install --cask flutter` and then look it up with `brew --prefix \
 flutter`, which only finds formulae, not casks).
 
+On Windows, a PATH or environment-variable change made with `setx` or \
+`[Environment]::SetEnvironmentVariable(...)` does NOT take effect in the \
+current process or in later steps of this same plan (only in brand-new \
+processes started afterward) — the same limitation `export` already has \
+in a POSIX shell. Do not assume a PATH change from an earlier step is \
+visible to a later step; either call the tool by its full path, or \
+re-apply the same environment setup within each step that needs it.
+
 If the goal is NOT actually about installing, configuring, or removing \
 developer tooling on this machine (e.g. it's a general question, a \
 creative writing request, small talk, or anything unrelated to \

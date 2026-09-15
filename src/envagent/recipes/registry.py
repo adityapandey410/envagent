@@ -28,6 +28,11 @@ class Recipe:
     """Optional Markdown heading to narrow a long doc (e.g. a version
     manager's README) down to its install section before grounding."""
     ide_choice: IdeChoice | None = None
+    supported_os: list[str] | None = None
+    """None = no restriction. Set this when doc_url is a plain string that
+    only actually covers some OSes (e.g. nvm/pyenv don't support native
+    Windows) — a per-OS doc_url dict doesn't need this, since an absent
+    key already expresses "unsupported"."""
 
 
 def _load_recipe(path: Path) -> Recipe:
@@ -39,12 +44,16 @@ def _load_recipe(path: Path) -> Recipe:
         doc_url=data["doc_url"],
         doc_section=data.get("doc_section"),
         ide_choice=ide_choice,
+        supported_os=data.get("supported_os"),
     )
 
 
 def resolve_doc_url(recipe: Recipe, os_key: str) -> str | None:
-    """Pick the right doc URL for this OS. Returns None if the recipe's
-    doc_url is a per-OS mapping that doesn't cover this OS yet."""
+    """Pick the right doc URL for this OS. Returns None if the OS isn't
+    covered — either a per-OS mapping missing this os_key, or a recipe
+    whose supported_os explicitly excludes it."""
+    if recipe.supported_os is not None and os_key not in recipe.supported_os:
+        return None
     if isinstance(recipe.doc_url, dict):
         return recipe.doc_url.get(os_key)
     return recipe.doc_url

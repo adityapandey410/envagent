@@ -312,11 +312,12 @@ class _FakeIdeChoice:
 
 
 class _FakeRecipe:
-    def __init__(self, name, doc_url, ide_choice=None, doc_section=None):
+    def __init__(self, name, doc_url, ide_choice=None, doc_section=None, supported_os=None):
         self.name = name
         self.doc_url = doc_url
         self.ide_choice = ide_choice
         self.doc_section = doc_section
+        self.supported_os = supported_os
 
 
 def _patch_recipe_and_docs(monkeypatch, recipe, doc_content="fake doc content"):
@@ -518,6 +519,77 @@ def test_docker_recipe_match_grounds_the_planning_prompt(monkeypatch, tmp_path):
     graph.invoke({"goal": "install docker", "status": "planning"}, config)
 
     assert any("UNIQUE_DOCKER_DOC_CONTENT" in p for p in captured_prompts)
+
+
+def test_recipe_unsupported_on_this_os_skips_grounding_and_does_not_fetch(monkeypatch, tmp_path):
+    fetch_called = []
+
+    _patch_env(monkeypatch, tmp_path, plan=PLAN)
+    recipe = _FakeRecipe(
+        name="node",
+        doc_url="https://example.com/nvm-readme",
+        ide_choice=None,
+        supported_os=["macos", "linux"],
+    )
+    monkeypatch.setattr("envagent.agent.nodes.match_recipe", lambda goal: recipe)
+    monkeypatch.setattr(
+        "envagent.agent.nodes.fetch_doc", lambda url: fetch_called.append(url) or "doc"
+    )
+    monkeypatch.setattr(
+        "envagent.agent.nodes.extract_os_section", lambda content, os_key: content
+    )
+    monkeypatch.setattr(
+        "envagent.agent.nodes.extract_section", lambda content, heading: content
+    )
+    monkeypatch.setattr("envagent.agent.nodes.detect_system", lambda: _FakeSystemInfo("windows"))
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "recipe-unsupported-os"}}
+
+    graph.invoke({"goal": "install node", "status": "planning"}, config)
+
+    assert fetch_called == []
+
+
+def test_windows_planning_prompt_includes_shell_and_path_notes(monkeypatch, tmp_path):
+    captured_prompts = []
+
+    class _CapturingProvider:
+        def complete(self, api_key, system, user):
+            captured_prompts.append(user)
+            return json.dumps(PLAN)
+
+    monkeypatch.setattr(
+        "envagent.agent.checkpointer.user_data_dir", lambda _app: str(tmp_path / "data")
+    )
+    monkeypatch.setattr(
+        "envagent.system.executor.user_log_dir", lambda _app: str(tmp_path / "logs")
+    )
+    monkeypatch.setattr(
+        "envagent.agent.nodes._active_provider_and_key",
+        lambda: (_CapturingProvider(), "fake-key"),
+    )
+    monkeypatch.setattr("envagent.agent.nodes.detect_system", lambda: _FakeSystemInfo("windows"))
+    monkeypatch.setattr("envagent.agent.nodes.can_elevate", lambda: True)
+    monkeypatch.setattr("envagent.agent.nodes.is_elevated", lambda: False)
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "windows-shell-note"}}
+
+    graph.invoke({"goal": "test goal", "status": "planning"}, config)
+
+    assert any("PowerShell" in p for p in captured_prompts)
+    assert any("envagent resume" in p for p in captured_prompts)
+
+
+class _FakeSystemInfo:
+    def __init__(self, os_key):
+        self.os_key = os_key
+        self.os_name = os_key
+        self.arch = "x86_64"
+        self.release = "test"
+        self.package_managers = []
+
+    def describe(self):
+        return f"{self.os_name} ({self.arch}, release {self.release})"
 
 
 def test_plan_prompt_warns_the_model_when_user_cannot_elevate(monkeypatch, tmp_path):

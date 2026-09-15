@@ -6,3 +6,9 @@ aliases:
   - npm
 doc_url: https://raw.githubusercontent.com/nvm-sh/nvm/master/README.md
 doc_section: "Install & Update Script"
+# nvm explicitly doesn't support native Windows (WSL/Git Bash only) —
+# nvm-windows is a separate project with its own doc; add a real Windows
+# recipe separately rather than grounding in nvm's Unix-only instructions.
+supported_os:
+  - macos
+  - linux

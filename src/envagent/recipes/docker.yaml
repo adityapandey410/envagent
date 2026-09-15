@@ -6,3 +6,4 @@ aliases:
 doc_url:
   macos: https://docs.docker.com/desktop/setup/install/mac-install/
   linux: https://docs.docker.com/engine/install/ubuntu/
+  windows: https://docs.docker.com/desktop/setup/install/windows-install/

@@ -5,3 +5,8 @@ aliases:
   - pyenv
 doc_url: https://raw.githubusercontent.com/pyenv/pyenv/master/README.md
 doc_section: "Installation"
+# pyenv explicitly doesn't support native Windows (pyenv-win is a separate
+# project with its own doc) — see node.yaml for the same reasoning.
+supported_os:
+  - macos
+  - linux
