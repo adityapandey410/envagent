@@ -1105,16 +1105,52 @@ run**:
   duplication (Phase-1 item 7's documented, accepted quirk) shows up
   exactly as expected and is not a new bug.
 
-**Still open**: whether the linked-token elevation fix actually works
-now (needs a third live test); whether an actual UAC-elevated step
-behaves as expected (still hasn't been reached in either run); full
-PowerShell dialect correctness beyond two sampled plans; Node/Python
-Windows recipes; UAC re-elevation automation (still deliberately not
-built).
+**Third live Windows run (same friend, after reinstalling round two's
+fixes) confirmed both prior fixes actually worked, and surfaced one more
+real, more serious bug**:
 
-Next concrete step: push these fixes, have the friend reinstall
+- **The elevation warning is gone** — confirms the explicit
+  `argtypes`/`restype` fix to the linked-token check works for a real
+  admin account on a real machine.
+- **No more `Test-Path -and` parse errors** — the model didn't even
+  reach for that pattern this time; the parenthesization guidance held.
+- **A new, more serious bug**: two `check_command`s
+  (`Test-Path -LiteralPath "...flutter.bat"` and a `[Environment]::Get...
+  -contains $flutterBin` check) each printed `False` to stdout — yet
+  both were still logged as `already satisfied — skipping`. Root cause:
+  in Windows PowerShell 5.1 (what `powershell.exe` invokes), a bare
+  boolean expression's printed value does **not** set the process exit
+  code — the process exits 0 regardless of whether the expression was
+  `$true` or `$false`. Since `check_command`'s whole contract is "exit 0
+  means satisfied," every check written as a bare boolean expression was
+  silently, always treated as satisfied — the worst kind of bug this
+  project tracks (exit-code-lies, same family as the `flutter
+  doctor`/`pip check` problem, but self-inflicted here rather than a
+  third-party tool's fault). This is what actually caused `flutter
+  doctor` to keep failing: the PATH-update step kept getting skipped as
+  "already done" when it never once actually ran. Fixed with explicit,
+  example-driven guidance in the Windows `shell_note`
+  (`agent/nodes.py`): every Windows `check_command` must wrap its
+  condition as `if (<condition>) { exit 0 } else { exit 1 }`, never a
+  bare expression. **Verified with two real provider calls** (`os_key`
+  forced to `"windows"`) before pushing: every `check_command` in fresh
+  Node and Flutter plans now correctly uses the
+  `if (...) { exit 0 } else { exit 1 }` pattern, including the exact
+  PATH-check step that was silently broken before.
+- Chose a prompt-level fix here, not an architectural one (unlike the
+  PATH-registry-refresh fix) — this is something the model can get
+  right by knowing the rule; there's no reliable generic way for the
+  Executor to safely rewrite an arbitrary model-generated PowerShell
+  expression into a correct exit-code-setting form after the fact.
+
+**Still open**: whether an actual UAC-elevated step behaves as expected
+(still hasn't been reached in any run — every run so far has found
+enough already-installed prerequisites to avoid one); full PowerShell
+dialect correctness beyond three sampled plans; Node/Python Windows
+recipes; UAC re-elevation automation (still deliberately not built).
+
+Next concrete step: push this fix, have the friend reinstall
 (`uv tool install --force git+https://github.com/adityapandey410/envagent`)
-and re-run `envagent setup "install flutter"` from scratch — confirm (a)
-the elevation warning is finally gone, (b) `flutter doctor` in the final
-step actually finds `flutter` this time, and (c) no more `Test-Path
--and` parse errors appear.
+and re-run `envagent setup "install flutter"` once more — this should be
+the run that actually completes end-to-end, with `flutter doctor`
+finally finding `flutter` for real.
