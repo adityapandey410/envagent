@@ -1036,13 +1036,85 @@ the results were very good for a first real run:
   re-verified live (fix landed after the friend's session ended) — next
   test should confirm the warning no longer fires for their account.
 
-**Still open**: whether an actual UAC prompt / elevated step behaves as
-expected (the run stopped at a manual step before reaching one); full
-dialect correctness beyond one sampled plan; Node/Python Windows recipes;
-UAC re-elevation automation (still deliberately not built).
+**Second live Windows run (same friend, after reinstalling the fix
+above) surfaced two more real bugs — the can_elevate() fix from round one
+did NOT actually work, and a real PATH-persistence failure ended the
+run**:
 
-Next concrete step: push this fix, have the friend reinstall
+- **The elevation warning still fired even after reinstalling.** Root
+  cause, found by re-reading the ctypes code rather than assumed:
+  `ctypes.windll.kernel32.GetCurrentProcess()` was called with no
+  explicit `restype`. Win32 `GetCurrentProcess` returns a pointer-sized
+  pseudo-handle, but ctypes' default (unannotated) return type is a
+  4-byte `c_int` — so the handle was very likely silently truncated
+  before ever reaching `OpenProcessToken`, making that call fail and
+  making the whole linked-token logic fall straight back through to
+  `_check_token_membership_in_admins(None)` — i.e. checking the same
+  UAC-filtered current token the round-one fix was specifically written
+  to stop checking. This is the *same underlying class of bug* as round
+  one's `c_bool`-vs-`c_int` sizing mistake (ctypes silently trusting
+  untyped defaults for a Win32 call), not a new kind of mistake — so
+  fixed systemically this time, not just patched at the one call site:
+  `system/permissions.py::_configure_win32_prototypes()` now declares
+  explicit `argtypes`/`restype` (real `wintypes.HANDLE`/`DWORD`/`BOOL`,
+  never a bare untyped int) for every Win32 function this module calls
+  — `GetCurrentProcess`, `OpenProcessToken`, `GetTokenInformation`,
+  `ConvertStringSidToSidW`, `CheckTokenMembership`, `CloseHandle`,
+  `LocalFree`. Still not live-reverified (no Windows machine here) —
+  needs a third live test.
+- **A real, root-caused execution failure**: after PATH was
+  persistently updated (`[Environment]::SetEnvironmentVariable(...,
+  "User")`, step 6), the final `flutter doctor` verification step
+  (step 8) failed with `flutter: not recognized`. Confirmed root cause:
+  every step runs as an independent `subprocess.Popen`, and Windows
+  writing a persistent PATH change to the registry does **not**
+  propagate to this already-running Python process's `os.environ`
+  snapshot (taken once at startup) — so no later step in the same run
+  could ever see an earlier step's persistent PATH change, only a
+  brand-new process started after the fact could. This is a real gap in
+  what the original PATH-persistence prompt note claimed ("a persistent
+  change IS visible to later steps" was aspirational, not yet true).
+  Fixed architecturally, not just with a stronger prompt:
+  `system/executor.py::_windows_env_with_fresh_path()` re-reads
+  User+Machine `PATH` directly from the registry (`winreg`,
+  `HKEY_CURRENT_USER\Environment` +
+  `HKEY_LOCAL_MACHINE\...\Session Manager\Environment`) and passes that
+  as the subprocess `env` before *every* Windows command — so this is
+  now actually true, not just asserted to the model. Degrades safely to
+  the inherited environment on any registry-read failure. The
+  `PLAN_SYSTEM_PROMPT`/`shell_note` guidance was also corrected to match
+  this (previously claimed-but-not-yet-true) reality, and a model step
+  that tried to do a *session-only* `$env:PATH = ...` "for later steps"
+  (observed live, step 5) — which can never work, persistent or not,
+  since it doesn't survive past that one step's own process — is now
+  explicitly discouraged.
+- **A separate, recurring PowerShell syntax bug observed live twice in
+  the same run**: `Test-Path $x -and (...)` — PowerShell parses `-and`
+  immediately after a bare `Test-Path` call as an attempted *named
+  parameter* to `Test-Path` itself (a real parsing gotcha, not a
+  hypothetical), not as the logical operator, causing a
+  `ParameterBindingException`. Both occurrences were `check_command`s,
+  so the run degraded safely (failed check → treated as unsatisfied →
+  proceeded to the real command) rather than crashing, but it's noisy
+  and would silently defeat idempotency on any command whose *real*
+  command has the same shape. Fixed by adding explicit guidance to the
+  Windows `shell_note` in `agent/nodes.py`: wrap a cmdlet call in
+  parentheses before `-and`/`-or` — `(Test-Path $x) -and $y`, never
+  `Test-Path $x -and $y`.
+- Also confirmed live: `envagent setup`'s check-command re-print-on-resume
+  duplication (Phase-1 item 7's documented, accepted quirk) shows up
+  exactly as expected and is not a new bug.
+
+**Still open**: whether the linked-token elevation fix actually works
+now (needs a third live test); whether an actual UAC-elevated step
+behaves as expected (still hasn't been reached in either run); full
+PowerShell dialect correctness beyond two sampled plans; Node/Python
+Windows recipes; UAC re-elevation automation (still deliberately not
+built).
+
+Next concrete step: push these fixes, have the friend reinstall
 (`uv tool install --force git+https://github.com/adityapandey410/envagent`)
-and re-run — confirm the elevation warning is gone and continue past the
-manual Flutter-SDK-download step to see the PATH-modification and verify
-steps run for real.
+and re-run `envagent setup "install flutter"` from scratch — confirm (a)
+the elevation warning is finally gone, (b) `flutter doctor` in the final
+step actually finds `flutter` this time, and (c) no more `Test-Path
+-and` parse errors appear.

@@ -23,24 +23,86 @@ _TOKEN_ELEVATION_TYPE = 18  # TOKEN_INFORMATION_CLASS::TokenElevationType
 _TOKEN_LINKED_TOKEN = 19  # TOKEN_INFORMATION_CLASS::TokenLinkedToken
 _TOKEN_ELEVATION_TYPE_LIMITED = 3
 
+_win32_prototypes_configured = False
+
+
+def _configure_win32_prototypes() -> None:
+    """Explicitly declare argtypes/restype for every Win32 call below.
+
+    A previous version of this code relied on ctypes' untyped defaults
+    (every foreign-function argument/return value treated as a 4-byte
+    `c_int` unless told otherwise). That silently truncated
+    GetCurrentProcess()'s pointer-sized pseudo-handle return value on
+    64-bit Windows, which made OpenProcessToken fail and made this whole
+    check fall back to the exact broken behavior it was meant to fix —
+    confirmed live on a real Windows 11 machine (see CLAUDE.md). Declaring
+    real prototypes (HANDLE/DWORD/BOOL, not bare ints) removes that whole
+    class of silent-truncation bug rather than fixing one instance of it."""
+    global _win32_prototypes_configured
+    if _win32_prototypes_configured:
+        return
+    kernel32 = ctypes.windll.kernel32
+    advapi32 = ctypes.windll.advapi32
+
+    kernel32.GetCurrentProcess.argtypes = []
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
+    kernel32.LocalFree.restype = wintypes.HLOCAL
+
+    advapi32.OpenProcessToken.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
+    ]
+    advapi32.OpenProcessToken.restype = wintypes.BOOL
+
+    advapi32.GetTokenInformation.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.GetTokenInformation.restype = wintypes.BOOL
+
+    advapi32.ConvertStringSidToSidW.argtypes = [
+        wintypes.LPCWSTR,
+        ctypes.POINTER(wintypes.LPVOID),
+    ]
+    advapi32.ConvertStringSidToSidW.restype = wintypes.BOOL
+
+    advapi32.CheckTokenMembership.argtypes = [
+        wintypes.HANDLE,
+        wintypes.LPVOID,
+        ctypes.POINTER(wintypes.BOOL),
+    ]
+    advapi32.CheckTokenMembership.restype = wintypes.BOOL
+
+    _win32_prototypes_configured = True
+
 
 def _check_token_membership_in_admins(h_token: int | None) -> bool:
     """Runs CheckTokenMembership for the Administrators SID against a
     specific token (or the current thread/process token, if h_token is
     None/0)."""
-    sid = ctypes.create_unicode_buffer(_WINDOWS_ADMINISTRATORS_SID)
-    psid = ctypes.c_void_p()
-    if not ctypes.windll.advapi32.ConvertStringSidToSidW(sid, ctypes.byref(psid)):
+    sid_ptr = wintypes.LPVOID()
+    if not ctypes.windll.advapi32.ConvertStringSidToSidW(
+        _WINDOWS_ADMINISTRATORS_SID, ctypes.byref(sid_ptr)
+    ):
         return False
     try:
-        is_member = ctypes.c_int()  # Win32 BOOL is a 4-byte int, not a 1-byte bool
+        is_member = wintypes.BOOL()
         if not ctypes.windll.advapi32.CheckTokenMembership(
-            h_token, psid, ctypes.byref(is_member)
+            h_token, sid_ptr, ctypes.byref(is_member)
         ):
             return False
         return bool(is_member.value)
     finally:
-        ctypes.windll.kernel32.LocalFree(psid)
+        ctypes.windll.kernel32.LocalFree(sid_ptr)
 
 
 def _windows_is_admin_group_member() -> bool:
@@ -57,6 +119,7 @@ def _windows_is_admin_group_member() -> bool:
     actual admin account on a real Windows 11 machine). The fix is to
     detect a limited token via TokenElevationType and, when found, check
     membership against its *linked* (full-rights) token instead."""
+    _configure_win32_prototypes()
     h_token = wintypes.HANDLE()
     if not ctypes.windll.advapi32.OpenProcessToken(
         ctypes.windll.kernel32.GetCurrentProcess(), _TOKEN_QUERY, ctypes.byref(h_token)
