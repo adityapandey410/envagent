@@ -156,7 +156,9 @@ def plan_node(state: AgentState) -> AgentState:
         "`if (<condition>) { exit 0 } else { exit 1 }` that reflects the "
         "actual thing being checked, using `$LASTEXITCODE` for an external "
         "program's own result (e.g. `git --version`) or the cmdlet's "
-        "output/result directly as `<condition>` otherwise."
+        "output/result directly as `<condition>` otherwise. (This agent "
+        "already disables Invoke-WebRequest's progress-bar rendering on "
+        "every command, so no need to add that yourself.)"
         if system_info.os_key == "windows"
         else ""
     )

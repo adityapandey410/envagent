@@ -45,7 +45,13 @@ def _popen_args(command: str) -> list[str] | str:
     """On Windows, run via PowerShell explicitly rather than letting `shell=True`
     fall through to cmd.exe, which understands neither bash nor PowerShell syntax."""
     if platform.system() == "Windows":
-        return ["powershell", "-NoProfile", "-NonInteractive", "-Command", command]
+        # Windows PowerShell 5.1's default Invoke-WebRequest progress-bar
+        # rendering has a severe, well-documented perf bug that can make a
+        # large download look hung for 30+ minutes (confirmed live) —
+        # disable it unconditionally rather than rely on every generated
+        # command remembering to.
+        prefixed = "$ProgressPreference = 'SilentlyContinue'; " + command
+        return ["powershell", "-NoProfile", "-NonInteractive", "-Command", prefixed]
     return command
 
 

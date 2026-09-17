@@ -12,7 +12,17 @@ def test_popen_args_uses_shell_string_on_posix(monkeypatch):
 def test_popen_args_uses_powershell_argv_on_windows(monkeypatch):
     monkeypatch.setattr(executor.platform, "system", lambda: "Windows")
     args = executor._popen_args("Get-Command node")
-    assert args == ["powershell", "-NoProfile", "-NonInteractive", "-Command", "Get-Command node"]
+    assert args[:4] == ["powershell", "-NoProfile", "-NonInteractive", "-Command"]
+    assert args[4].endswith("Get-Command node")
+
+
+def test_popen_args_disables_the_slow_progress_bar_on_windows(monkeypatch):
+    # Invoke-WebRequest's default progress rendering has a severe perf bug
+    # on large downloads (confirmed live: looked hung for 30+ minutes) —
+    # every Windows command should disable it unconditionally.
+    monkeypatch.setattr(executor.platform, "system", lambda: "Windows")
+    args = executor._popen_args("Invoke-WebRequest -Uri $url -OutFile $out")
+    assert "$ProgressPreference = 'SilentlyContinue'" in args[4]
 
 
 def test_run_command_passes_shell_true_only_for_a_string_command(monkeypatch):
@@ -35,13 +45,8 @@ def test_run_command_passes_shell_true_only_for_a_string_command(monkeypatch):
 
     assert len(calls) == 1
     args, shell = calls[0]
-    assert args == [
-        "powershell",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "winget install Git.Git",
-    ]
+    assert args[:4] == ["powershell", "-NoProfile", "-NonInteractive", "-Command"]
+    assert args[4].endswith("winget install Git.Git")
     assert shell is False
 
 

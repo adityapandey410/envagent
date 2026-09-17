@@ -1149,8 +1149,33 @@ enough already-installed prerequisites to avoid one); full PowerShell
 dialect correctness beyond three sampled plans; Node/Python Windows
 recipes; UAC re-elevation automation (still deliberately not built).
 
+**A fourth issue, reported without saved output**: during (presumably)
+the SDK/installer download step, the friend's terminal appeared to hang
+for 30+ minutes "calculating something in bytes" before they powered the
+laptop off. No exact command/output was recoverable, but the symptom is
+a strong, specific match for a well-documented Windows PowerShell 5.1
+bug: `Invoke-WebRequest`'s default progress-bar rendering has a severe
+performance regression on larger files that can look exactly like a
+frozen process instead of a slow-but-progressing download. Fixed at the
+**architecture** level rather than the prompt level this time (unlike
+the earlier `check_command`/`-and` fixes, which were prompt-only because
+the model could reliably get those right once told the rule) — this one
+is guarded in code instead: `system/executor.py::_popen_args` now
+unconditionally prefixes every Windows command with
+`$ProgressPreference = 'SilentlyContinue'; ` before it's ever run, so it
+no longer depends on the model remembering to add it. `PLAN_SYSTEM_PROMPT`
+was trimmed back down accordingly (a redundant instruction now, since
+the fix is unconditional — kept only a one-line mention so the model
+doesn't also add it itself, which is harmless but wasted tokens).
+**Not yet live-reverified** (no confirmed repro — this is a strong-match
+hypothesis fix, not a confirmed-then-fixed bug like the others above);
+worth explicitly confirming the next Flutter/Docker download step
+completes in a normal timeframe rather than assuming this was really the
+cause.
+
 Next concrete step: push this fix, have the friend reinstall
 (`uv tool install --force git+https://github.com/adityapandey410/envagent`)
-and re-run `envagent setup "install flutter"` once more — this should be
-the run that actually completes end-to-end, with `flutter doctor`
-finally finding `flutter` for real.
+and re-run `envagent setup "install flutter"` once more, this time timing
+the download step specifically — this should be the run that actually
+completes end-to-end, with `flutter doctor` finally finding `flutter` for
+real.
