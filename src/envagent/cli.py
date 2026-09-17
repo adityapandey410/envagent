@@ -223,6 +223,8 @@ def _render_interrupt(payload: dict):
         return questionary.select(payload["message"], choices=payload["options"]).ask()
     if payload["type"] == "checkbox":
         return questionary.checkbox(payload["message"], choices=payload["options"]).ask()
+    if payload["type"] == "text":
+        return questionary.text(payload["message"]).ask()
     raise ValueError(f"Unknown interrupt type: {payload['type']!r}")
 
 

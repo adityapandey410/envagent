@@ -9,7 +9,7 @@ import json_repair
 from langgraph.config import get_stream_writer
 from langgraph.types import interrupt
 
-from envagent.agent.prompts import JUDGE_SYSTEM_PROMPT, PLAN_SYSTEM_PROMPT
+from envagent.agent.prompts import CLARIFY_SYSTEM_PROMPT, JUDGE_SYSTEM_PROMPT, PLAN_SYSTEM_PROMPT
 from envagent.agent.state import Assessment, AgentState
 from envagent.config.credentials import get_api_key
 from envagent.config.settings import load_settings
@@ -65,6 +65,64 @@ def _parse_json_lenient(raw: str):
 
 def _parse_plan(raw: str) -> list[dict]:
     return _parse_json_lenient(raw)
+
+
+_CUSTOM_ANSWER_OPTION = "Other (type your own answer)"
+
+
+def clarify_node(state: AgentState) -> AgentState:
+    """For a freeform (no-recipe) goal, decide whether it's ambiguous
+    enough to warrant a clarifying question before planning. Recipe-matched
+    goals skip this entirely — they're curated, and Flutter already has
+    its own ide_choice for the one choice it needs.
+
+    A select/checkbox question always gets a guaranteed "Other" option
+    appended in code (not left to the model to remember) — picking it
+    raises a follow-up free-text interrupt, so an answer that doesn't fit
+    any listed option is never a dead end."""
+    if match_recipe(state["goal"]) is not None:
+        return state
+    provider, api_key = _active_provider_and_key()
+    raw = provider.complete(api_key, CLARIFY_SYSTEM_PROMPT, state["goal"])
+    try:
+        parsed = _parse_json_lenient(raw)
+        if not (isinstance(parsed, dict) and parsed.get("needs_clarification")):
+            return state
+        message = parsed["message"]
+        question_type = parsed.get("type", "select")
+    except Exception:
+        return state  # malformed clarify response shouldn't block planning
+
+    if question_type == "text":
+        answer = interrupt({"type": "text", "message": message, "options": None})
+    else:
+        options = list(parsed.get("options") or [])
+        if not options:
+            return state  # select/checkbox with no real options is malformed
+        answer = interrupt(
+            {
+                "type": question_type,
+                "message": message,
+                "options": [*options, _CUSTOM_ANSWER_OPTION],
+            }
+        )
+        chosen = answer if isinstance(answer, list) else [answer]
+        if _CUSTOM_ANSWER_OPTION in chosen:
+            custom = interrupt(
+                {
+                    "type": "text",
+                    "message": "Please describe what you want:",
+                    "options": None,
+                }
+            )
+            if isinstance(answer, list):
+                answer = [a for a in answer if a != _CUSTOM_ANSWER_OPTION] + [custom]
+            else:
+                answer = custom
+
+    if isinstance(answer, list):
+        answer = ", ".join(answer)
+    return {**state, "clarification": answer}
 
 
 def plan_node(state: AgentState) -> AgentState:
@@ -162,9 +220,12 @@ def plan_node(state: AgentState) -> AgentState:
         if system_info.os_key == "windows"
         else ""
     )
+    clarification = state.get("clarification")
+    clarification_note = f"\n\nThe user clarified: {clarification}" if clarification else ""
     user_prompt = (
         f"Operating system: {system_info.describe()}\n\n"
-        f"Goal: {state['goal']}{grounding}{elevation_note}{windows_elevation_note}{shell_note}"
+        f"Goal: {state['goal']}{grounding}{clarification_note}"
+        f"{elevation_note}{windows_elevation_note}{shell_note}"
     )
     raw = provider.complete(api_key, PLAN_SYSTEM_PROMPT, user_prompt)
     plan = _parse_plan(raw)

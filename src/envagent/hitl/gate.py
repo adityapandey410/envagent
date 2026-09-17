@@ -20,9 +20,10 @@ class PlanStep(TypedDict):
 
 
 class Interrupt(TypedDict):
-    type: Literal["confirm", "select", "checkbox"]
+    type: Literal["confirm", "select", "checkbox", "text"]
     message: str
     options: list[str] | None
+    """Choices for select/checkbox. None for confirm/text (free-form input)."""
 
 
 _DESTRUCTIVE_PATTERNS = (

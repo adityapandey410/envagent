@@ -1179,3 +1179,145 @@ and re-run `envagent setup "install flutter"` once more, this time timing
 the download step specifically — this should be the run that actually
 completes end-to-end, with `flutter doctor` finally finding `flutter` for
 real.
+
+## Freeform planning can now ask a clarifying question (new feature)
+
+Previously, only recipe-matched goals could ever pause mid-plan to ask
+the user something (Flutter's IDE `select` choice). Freeform goals (no
+vetted recipe — everything except Flutter/Node/Python/Docker) went
+straight from goal to full plan in one LLM call, with `PLAN_SYSTEM_PROMPT`
+explicitly forbidding clarifying questions. That silently broke down for
+genuinely ambiguous goals — "set up a backend dev environment" (Node?
+Django? Rails? Spring?) or "set up an AI dev environment" (a lightweight
+API-consumer setup vs. a full GPU/CUDA/PyTorch training stack — very
+different installs) — the model would just guess one interpretation with
+no way for the user to know which. Requested directly by the user, who
+wanted the agent to behave like other HITL-capable agents: ask when the
+goal is a genuine fork in the road, using the same typed interrupt
+mechanism already proven elsewhere, not a new interaction paradigm.
+
+- **New graph node**: `clarify -> plan -> execute -> verify -> ...`
+  (`agent/graph.py`). `clarify_node` (`agent/nodes.py`) calls
+  `match_recipe(goal)` first (free) and returns immediately, unchanged,
+  if a recipe matched — recipes are curated and Flutter already has its
+  own `ide_choice`; extending individual recipes with their own further
+  clarifying questions is a separate, not-yet-built enhancement.
+- **One new, narrow LLM call** (`CLARIFY_SYSTEM_PROMPT`, `agent/prompts.py`)
+  for freeform goals only: decide if the goal is genuinely ambiguous in a
+  way that changes what gets installed, and if so return one
+  `select`/`checkbox` question; otherwise `{"needs_clarification": false}`
+  and nothing else. Prompted explicitly to prefer not asking (specific
+  goals like "install docker" or "install rust" must sail through
+  untouched) and to ask at most one question (combine independent
+  choices into one `checkbox` rather than chaining rounds).
+- **Real, deliberate cost**: +1 LLM call on *every* freeform goal,
+  whether or not it ends up asking anything. Recipe-matched goals: zero
+  added cost (skipped entirely). An ambiguous freeform goal now costs 2
+  calls total (clarify + plan) instead of 1 — accepted tradeoff, this is
+  exactly what was asked for.
+- `AgentState` gained `clarification: NotRequired[str]`
+  (`agent/state.py`), same shape as `ide_choice`. `plan_node` folds it
+  into its user prompt (`"The user clarified: ..."`) when present;
+  `PLAN_SYSTEM_PROMPT` gained one line telling it to treat that as
+  authoritative rather than re-litigating it.
+- **`cli.py` needed zero changes** — `_render_interrupt` already renders
+  any `{type, message, options}` payload generically regardless of which
+  node raised it; confirmed by reading it before assuming.
+- **Known, accepted minor quirk, same family as an existing one (Phase 1
+  item 7's check_command duplication)**: `clarify_node`'s LLM call
+  necessarily happens *before* its `interrupt()` call (the decision to
+  interrupt comes from that call's own output) — so resuming a
+  clarification answer re-runs that one LLM call once more before the
+  interrupt replays the cached answer instantly. No correctness impact,
+  one redundant call only in the specific case where the user needed to
+  be asked something. Not architected around — a keyword-heuristic
+  pre-filter doesn't fit a domain-judgment problem like this one.
+- **No new deterministic eval-scenario file.** Unlike `recipe_matching.json`
+  (keyword matching) or `hitl_risk_gating.json` (keyword gating), "does
+  this goal need clarification" is real model judgment, not deterministic
+  logic — exactly the boundary CLAUDE.md's Evaluation section already
+  flagged as the point where plain-pytest scenarios stop being the right
+  tool. Handled instead via live verification (below), matching how every
+  other model-judgment-dependent feature in this project got verified.
+- **Backward compatible by construction, confirmed rather than assumed**:
+  all 68 pre-existing tests needed zero changes — the existing
+  `_FakeProvider`/`_CapturingProvider` test doubles already return a JSON
+  *list* (the plan) for any system prompt they don't specifically
+  recognize, which `clarify_node` correctly reads as "not a dict → no
+  clarification needed" and passes straight through. Ran the full suite
+  before adding anything to verify this rather than assume it.
+- **Verified live against the real provider**, not just unit tests:
+  - "set up a backend dev environment" →
+    `"Which primary backend stack do you want..."` with options
+    `["Node.js with Express", "Python with Django", "Python with
+    Flask/FastAPI", "Java with Spring Boot", "Something else..."]`.
+  - "set up an AI dev environment" →
+    `"What kind of AI development environment..."` with options
+    distinguishing `"Building apps that call AI/LLM APIs..."` from
+    `"Training/fine-tuning models locally with GPU acceleration..."`,
+    plus a `"Both"` and an `"I'm not sure"` escape hatch — exactly the
+    gen-AI-vs-ML distinction that motivated this feature.
+  - "install flutter" → recipe's own `ide_choice` fires as before,
+    `clarify_node` never invoked (confirmed via a system-prompt-tracking
+    fake provider in tests, not just live).
+  - "install docker" and "install rust" → no clarifying interrupt at
+    all, straight through to a real plan and its first destructive-step
+    confirm — confirms the model doesn't over-ask for goals that are
+    already specific enough, even for "rust," which has no recipe at all
+    (freeform path, correctly judged unambiguous).
+  - Resuming "set up a backend dev environment" with "Python with
+    Django" produced a real, fully Django-specific plan (Homebrew,
+    venv, `django-admin startproject`, `manage.py migrate` /
+    `runserver`) — confirms the answer genuinely reaches and shapes the
+    final plan, not just that the interrupt fires.
+
+Not yet done: recipes don't get their own additional clarifying
+questions beyond Flutter's existing `ide_choice` (e.g. Flutter doesn't
+yet ask Android vs. iOS target) — a separate, recipe-specific extension
+of the same underlying mechanism, not built here.
+
+## Clarifying questions gained a free-text escape hatch (follow-up to the above)
+
+The `select`/`checkbox` clarifying question above was strictly
+multiple-choice — no way for the user to type an answer that didn't fit
+any listed option. Fixed directly after the user pointed this out (and
+asked whether a clear goal would still get asked pointlessly — confirmed
+no, but that's a plain `if` inside `clarify_node`, not a LangGraph
+`add_conditional_edges` construct; worth being precise about that
+distinction since it was asked directly).
+
+- **`hitl/gate.py::Interrupt.type`** gained a fourth value, `"text"`
+  (`cli.py::_render_interrupt` renders it via `questionary.text()` — the
+  only CLI change needed).
+- **The "Other" option is now code-guaranteed, not model-dependent**:
+  `clarify_node` appends a literal `"Other (type your own answer)"` to
+  every select/checkbox options list itself, rather than trusting the
+  model to remember one. `CLARIFY_SYSTEM_PROMPT` was updated to tell the
+  model NOT to invent its own "other" option any more (confirmed live:
+  it stopped doing so once told). If the user picks it (or includes it
+  among checkbox selections), `clarify_node` raises a second, `"text"`
+  follow-up interrupt ("Please describe what you want:") and substitutes
+  the typed answer in place of the literal "Other" string before storing
+  `state["clarification"]` (a checkbox answer keeps its other selections
+  — `["Docker", "Other..."]` + typed "Helm too" → stored as
+  `"Docker, Helm too"`).
+- The model can also directly request `"type": "text"` from the start
+  for a goal where no small fixed list genuinely fits — same follow-up
+  mechanism, just skipping straight to it without a select/checkbox step
+  first.
+- Extends the same accepted "node replays from the top on resume" quirk
+  already documented above — picking "Other" means a *second* pause
+  within the same node, so resuming the follow-up text answer replays
+  the clarify LLM call and the first (now-cached) interrupt again before
+  reaching the second one. Same reasoning as before: not worth
+  architecting around for a rare path.
+- **Verified live**: a real "set up a backend dev environment" call no
+  longer includes a model-invented "other" option in its option list
+  (only the code-appended one); picking it raised the expected `"text"`
+  follow-up; typing `"I want to build a backend with the Go Gin
+  framework"` (an answer not present in any original option) produced a
+  fully Go/Gin-specific plan (correct Homebrew install, `GOPATH`/`PATH`
+  profile setup, `go install .../gin-gonic/gin@latest`, a real
+  `main.go` Gin starter file, `go mod tidy`, `go run .`) — confirming
+  the free-text path genuinely reaches and shapes the plan, not just
+  that the interrupt renders.

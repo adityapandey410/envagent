@@ -5,7 +5,7 @@ from langgraph.types import Command
 
 from envagent.agent.graph import build_graph
 from envagent.agent.nodes import NoStepsPlannedError
-from envagent.agent.prompts import JUDGE_SYSTEM_PROMPT
+from envagent.agent.prompts import CLARIFY_SYSTEM_PROMPT, JUDGE_SYSTEM_PROMPT
 
 PLAN = [
     {
@@ -34,17 +34,20 @@ PLAN_ALREADY_SATISFIED = [
 
 
 class _FakeProvider:
-    def __init__(self, plan=PLAN, judgement=None):
+    def __init__(self, plan=PLAN, judgement=None, clarify_response=None):
         self._plan = plan
         self._judgement = judgement or {"achieved": True, "summary": "All steps completed."}
+        self._clarify_response = clarify_response or {"needs_clarification": False}
 
     def complete(self, api_key: str, system: str, user: str) -> str:
         if system == JUDGE_SYSTEM_PROMPT:
             return json.dumps(self._judgement)
+        if system == CLARIFY_SYSTEM_PROMPT:
+            return json.dumps(self._clarify_response)
         return json.dumps(self._plan)
 
 
-def _patch_env(monkeypatch, tmp_path, plan=PLAN, judgement=None):
+def _patch_env(monkeypatch, tmp_path, plan=PLAN, judgement=None, clarify_response=None):
     monkeypatch.setattr(
         "envagent.agent.checkpointer.user_data_dir", lambda _app: str(tmp_path / "data")
     )
@@ -53,7 +56,7 @@ def _patch_env(monkeypatch, tmp_path, plan=PLAN, judgement=None):
     )
     monkeypatch.setattr(
         "envagent.agent.nodes._active_provider_and_key",
-        lambda: (_FakeProvider(plan, judgement), "fake-key"),
+        lambda: (_FakeProvider(plan, judgement, clarify_response), "fake-key"),
     )
 
 
@@ -636,3 +639,224 @@ def test_ide_choice_is_not_asked_again_on_resume(monkeypatch, tmp_path):
     result = graph.invoke(Command(resume="VS Code"), config)
     if "__interrupt__" in result:
         assert result["__interrupt__"][0].value["type"] != "select"
+
+
+def test_freeform_goal_with_ambiguity_raises_a_clarifying_interrupt(monkeypatch, tmp_path):
+    clarify_response = {
+        "needs_clarification": True,
+        "type": "select",
+        "message": "Which backend framework?",
+        "options": ["Node/Express", "Python/Django"],
+    }
+    _patch_env(monkeypatch, tmp_path, plan=PLAN, clarify_response=clarify_response)
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "clarify-select"}}
+
+    result = graph.invoke({"goal": "set up a backend dev environment", "status": "planning"}, config)
+
+    assert "__interrupt__" in result
+    payload = result["__interrupt__"][0].value
+    assert payload["type"] == "select"
+    assert payload["message"] == "Which backend framework?"
+    assert payload["options"] == ["Node/Express", "Python/Django", "Other (type your own answer)"]
+
+
+def test_clarification_answer_reaches_the_planning_prompt(monkeypatch, tmp_path):
+    captured_prompts = []
+
+    class _CapturingProvider:
+        def complete(self, api_key, system, user):
+            if system == CLARIFY_SYSTEM_PROMPT:
+                return json.dumps(
+                    {
+                        "needs_clarification": True,
+                        "type": "select",
+                        "message": "Which backend framework?",
+                        "options": ["Node/Express", "Python/Django"],
+                    }
+                )
+            captured_prompts.append(user)
+            return json.dumps(PLAN)
+
+    monkeypatch.setattr(
+        "envagent.agent.checkpointer.user_data_dir", lambda _app: str(tmp_path / "data")
+    )
+    monkeypatch.setattr(
+        "envagent.system.executor.user_log_dir", lambda _app: str(tmp_path / "logs")
+    )
+    monkeypatch.setattr(
+        "envagent.agent.nodes._active_provider_and_key",
+        lambda: (_CapturingProvider(), "fake-key"),
+    )
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "clarify-answer-flows-to-plan"}}
+
+    result = graph.invoke({"goal": "set up a backend dev environment", "status": "planning"}, config)
+    assert "__interrupt__" in result
+
+    graph.invoke(Command(resume="Node/Express"), config)
+
+    assert any("The user clarified: Node/Express" in p for p in captured_prompts)
+
+
+def test_recipe_matched_goal_never_calls_the_clarify_prompt(monkeypatch, tmp_path):
+    seen_system_prompts = []
+
+    class _TrackingProvider:
+        def complete(self, api_key, system, user):
+            seen_system_prompts.append(system)
+            return json.dumps(PLAN)
+
+    monkeypatch.setattr(
+        "envagent.agent.checkpointer.user_data_dir", lambda _app: str(tmp_path / "data")
+    )
+    monkeypatch.setattr(
+        "envagent.system.executor.user_log_dir", lambda _app: str(tmp_path / "logs")
+    )
+    monkeypatch.setattr(
+        "envagent.agent.nodes._active_provider_and_key",
+        lambda: (_TrackingProvider(), "fake-key"),
+    )
+    recipe = _FakeRecipe(name="flutter", doc_url="https://example.com/install", ide_choice=None)
+    _patch_recipe_and_docs(monkeypatch, recipe)
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "recipe-skips-clarify"}}
+
+    graph.invoke({"goal": "install flutter", "status": "planning"}, config)
+
+    assert CLARIFY_SYSTEM_PROMPT not in seen_system_prompts
+
+
+def test_clarification_is_not_asked_again_on_resume(monkeypatch, tmp_path):
+    clarify_response = {
+        "needs_clarification": True,
+        "type": "select",
+        "message": "Which backend framework?",
+        "options": ["Node/Express", "Python/Django"],
+    }
+    _patch_env(monkeypatch, tmp_path, plan=PLAN, clarify_response=clarify_response)
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "clarify-resume"}}
+
+    result = graph.invoke({"goal": "set up a backend dev environment", "status": "planning"}, config)
+    assert "__interrupt__" in result
+
+    result = graph.invoke(Command(resume="Node/Express"), config)
+    if "__interrupt__" in result:
+        assert result["__interrupt__"][0].value["message"] != "Which backend framework?"
+
+
+def test_picking_other_on_a_select_raises_a_followup_text_interrupt(monkeypatch, tmp_path):
+    clarify_response = {
+        "needs_clarification": True,
+        "type": "select",
+        "message": "Which backend framework?",
+        "options": ["Node/Express", "Python/Django"],
+    }
+    _patch_env(monkeypatch, tmp_path, plan=PLAN, clarify_response=clarify_response)
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "clarify-other-select"}}
+
+    graph.invoke({"goal": "set up a backend dev environment", "status": "planning"}, config)
+    result = graph.invoke(Command(resume="Other (type your own answer)"), config)
+
+    assert "__interrupt__" in result
+    payload = result["__interrupt__"][0].value
+    assert payload["type"] == "text"
+    assert payload["options"] is None
+
+
+def test_custom_text_answer_after_other_reaches_the_planning_prompt(monkeypatch, tmp_path):
+    captured_prompts = []
+
+    class _CapturingProvider:
+        def complete(self, api_key, system, user):
+            if system == CLARIFY_SYSTEM_PROMPT:
+                return json.dumps(
+                    {
+                        "needs_clarification": True,
+                        "type": "select",
+                        "message": "Which backend framework?",
+                        "options": ["Node/Express", "Python/Django"],
+                    }
+                )
+            captured_prompts.append(user)
+            return json.dumps(PLAN)
+
+    monkeypatch.setattr(
+        "envagent.agent.checkpointer.user_data_dir", lambda _app: str(tmp_path / "data")
+    )
+    monkeypatch.setattr(
+        "envagent.system.executor.user_log_dir", lambda _app: str(tmp_path / "logs")
+    )
+    monkeypatch.setattr(
+        "envagent.agent.nodes._active_provider_and_key",
+        lambda: (_CapturingProvider(), "fake-key"),
+    )
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "clarify-other-custom-text"}}
+
+    graph.invoke({"goal": "set up a backend dev environment", "status": "planning"}, config)
+    graph.invoke(Command(resume="Other (type your own answer)"), config)
+    graph.invoke(Command(resume="Go with the Gin framework"), config)
+
+    assert any("The user clarified: Go with the Gin framework" in p for p in captured_prompts)
+
+
+def test_checkbox_with_other_substitutes_custom_text_and_keeps_other_selections(
+    monkeypatch, tmp_path
+):
+    captured_prompts = []
+
+    class _CapturingProvider:
+        def complete(self, api_key, system, user):
+            if system == CLARIFY_SYSTEM_PROMPT:
+                return json.dumps(
+                    {
+                        "needs_clarification": True,
+                        "type": "checkbox",
+                        "message": "Which components do you want?",
+                        "options": ["Docker", "Kubernetes"],
+                    }
+                )
+            captured_prompts.append(user)
+            return json.dumps(PLAN)
+
+    monkeypatch.setattr(
+        "envagent.agent.checkpointer.user_data_dir", lambda _app: str(tmp_path / "data")
+    )
+    monkeypatch.setattr(
+        "envagent.system.executor.user_log_dir", lambda _app: str(tmp_path / "logs")
+    )
+    monkeypatch.setattr(
+        "envagent.agent.nodes._active_provider_and_key",
+        lambda: (_CapturingProvider(), "fake-key"),
+    )
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "clarify-checkbox-other"}}
+
+    graph.invoke({"goal": "set up a container dev environment", "status": "planning"}, config)
+    graph.invoke(Command(resume=["Docker", "Other (type your own answer)"]), config)
+    graph.invoke(Command(resume="Helm too"), config)
+
+    assert any(
+        "The user clarified: Docker, Helm too" in p for p in captured_prompts
+    )
+
+
+def test_text_type_clarify_response_raises_a_text_interrupt_directly(monkeypatch, tmp_path):
+    clarify_response = {
+        "needs_clarification": True,
+        "type": "text",
+        "message": "Describe what you want set up:",
+    }
+    _patch_env(monkeypatch, tmp_path, plan=PLAN, clarify_response=clarify_response)
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "clarify-text-direct"}}
+
+    result = graph.invoke({"goal": "set up something unusual", "status": "planning"}, config)
+
+    assert "__interrupt__" in result
+    payload = result["__interrupt__"][0].value
+    assert payload["type"] == "text"
+    assert payload["options"] is None

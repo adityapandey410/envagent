@@ -27,3 +27,6 @@ class AgentState(TypedDict):
 
     ide_choice: NotRequired[str]
     """Set by plan_node once the recipe's select interrupt is answered."""
+
+    clarification: NotRequired[str]
+    """Set by clarify_node once a freeform goal's ambiguity is resolved."""
